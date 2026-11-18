@@ -37,6 +37,14 @@ describe('Phase 1 headless vertical slice', () => {
     expect(artifacts.body.map((artifact: { type: string }) => artifact.type)).toEqual(expect.arrayContaining(['questions', 'plan', 'source-diff', 'test-report']));
     const events = await api.get(`/api/runs/${resumedRun.body.id}/events`).expect(200);
     expect(events.text).toContain('event: run.completed');
+    const replayedEvents = await api.get(`/api/runs/${resumedRun.body.id}/events`)
+      .set('Last-Event-ID', '1')
+      .expect(200);
+    expect(replayedEvents.text).toContain('event: run.completed');
+    expect(replayedEvents.text).not.toContain('event: run.created');
+    await api.get(`/api/runs/${resumedRun.body.id}/events`)
+      .set('Last-Event-ID', '99')
+      .expect(409);
     const oldRun = await api.get(`/api/runs/${failedRun.body.id}`).expect(200);
     expect(oldRun.body.errorCode).toBe('TOOL_EXECUTION_FAILED');
     await api.close();

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import type { Transaction } from 'kysely';
 import type { EventEnvelope } from '@titan/contracts';
+import { DomainError } from '@titan/contracts';
 import type { Database, EventTable, JsonValue } from '../../database/types.js';
 import { DatabaseService } from '../../database/database.service.js';
 
@@ -74,6 +75,16 @@ export class EventsService {
   }
 
   async listForRun(runId: string, afterSequence = 0): Promise<EventEnvelope[]> {
+    const latest = await this.database.db.selectFrom('event')
+      .select(({ fn }) => fn.max('sequence').as('max_sequence'))
+      .where('run_id', '=', runId)
+      .executeTakeFirst();
+    const maxSequence = Number(latest?.max_sequence ?? 0);
+    if (afterSequence > maxSequence) {
+      throw new DomainError('EVENT_SEQUENCE_GAP', `event cursor ${afterSequence} is ahead of run ${runId}`, {
+        latestSequence: maxSequence,
+      });
+    }
     const rows = await this.database.db.selectFrom('event').selectAll()
       .where('run_id', '=', runId).where('sequence', '>', afterSequence)
       .orderBy('sequence', 'asc').execute();

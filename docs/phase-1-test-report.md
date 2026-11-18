@@ -58,7 +58,7 @@ docker compose -f infra/docker-compose.yml config
 
 - Codex 和 Qwen Adapter 已完成统一接口、凭证引用检查和事件归一化；真实 Codex App Server/Qwen 网络 Transport 仍由宿主注入，未在自动化测试中调用外部模型服务。
 - Daemon 的工作区、Worktree、进程组和重连状态已可在本机包内验证；Control Plane 的 Daemon 注册/心跳 API 与跨进程事件 Outbox 仍需下一轮接入。
-- SSE 当前从 PostgreSQL 事件表读取已有事件并返回流，不包含完整的长期连接实时发布器和断线后的自动补拉客户端。
+- SSE 已支持历史回放、`Last-Event-ID`、序列断档错误和 `follow=true` 持久轮询订阅；CLI 端的自动断线重连和补拉仍需下一轮接入。
 - Artifact 内容使用本地受控目录，S3/MinIO 只保留基础设施配置，尚未接入对象存储适配器。
 - CLI 已实现 Task 创建和 Run 查询；Session、Run 事件订阅和 Daemon 管理命令仍需扩展。
 - Daemon 已支持控制面注册、心跳、撤销和事件 Outbox 去重；跨进程实时调度和 Daemon 自动派发仍需下一轮接入。
