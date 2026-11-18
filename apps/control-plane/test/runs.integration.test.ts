@@ -32,4 +32,27 @@ describe('Control Plane run API', () => {
     expect(oldRun.body.errorCode).toBe('TOOL_EXECUTION_FAILED');
     await api.close();
   });
+
+  it('accepts an empty JSON body when completing a run', async () => {
+    const { createTestApp } = await import('../src/test-app.js');
+    const api = await createTestApp();
+    const suffix = randomUUID();
+    const session = await api.post('/api/tasks/task_dev/sessions')
+      .set('Idempotency-Key', `session-complete-${suffix}`)
+      .send({
+        entryAgent: 'project-manager',
+        goal: '验证空 JSON body',
+        idempotencyKey: `session-complete-${suffix}`,
+      })
+      .expect(201);
+    const run = await api.post(`/api/sessions/${session.body.id}/runs`)
+      .set('Idempotency-Key', `run-complete-${suffix}`)
+      .send({ idempotencyKey: `run-complete-${suffix}` })
+      .expect(201);
+
+    await api.post(`/api/runs/${run.body.id}/complete`)
+      .set('content-type', 'application/json')
+      .expect(204);
+    await api.close();
+  });
 });

@@ -6,13 +6,28 @@ import { HttpErrorFilter } from './common/http-error.filter.js';
 import { DatabaseService } from './database/database.service.js';
 
 export async function createApp(): Promise<NestFastifyApplication> {
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
+  const adapter = new FastifyAdapter();
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     logger: process.env.CONTROL_PLANE_LOG === 'debug' ? ['log', 'error', 'warn'] : false,
   });
   app.useGlobalFilters(new HttpErrorFilter());
   await app.get(DatabaseService).initialize();
   await app.init();
-  await app.getHttpAdapter().getInstance().ready();
+  const fastify = app.getHttpAdapter().getInstance();
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+    const rawBody = typeof body === 'string' ? body : body.toString('utf8');
+    if (rawBody.length === 0) {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(rawBody));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
+  await fastify.ready();
   return app;
 }
 

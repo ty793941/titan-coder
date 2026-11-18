@@ -37,9 +37,9 @@ docker compose -f infra/docker-compose.yml config
 | `@titan/daemon` | 工作区路径限制、Git Worktree、心跳重连 | 3 tests passed |
 | `@titan/cli` | Task JSON 输出和稳定错误码 | 2 tests passed |
 | `@titan/agent-runtime` | 无证据时 Goal 保持继续状态 | 1 test passed |
-| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、Artifact、SSE | 4 tests passed |
+| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE | 5 tests passed |
 
-全仓共报告 `24 tests passed`，无失败测试。
+全仓共报告 `25 tests passed`，无失败测试。
 
 ## 4. 端到端证据
 
