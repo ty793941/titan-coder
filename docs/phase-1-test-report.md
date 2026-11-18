@@ -10,8 +10,8 @@
 
 - Node.js：`v24.5.0`，项目引擎约束为 `>=22.0.0`。
 - pnpm：`10.34.5`。
-- PostgreSQL：本机 PostgreSQL 14 临时实例，监听 `127.0.0.1:55432`，数据库名为 `titan`。
-- Docker Compose：`docker compose config` 通过；本机 Docker daemon 未启动，因此本次集成测试使用同等 PostgreSQL 本地实例。
+- PostgreSQL：Docker Compose 启动的 `postgres:17-alpine` 容器，映射到 `127.0.0.1:55432`，数据库名为 `titan`，容器状态为 `healthy`。
+- Docker Compose：`infra/docker-compose.yml` 配置通过，Control Plane 集成测试已使用 Compose PostgreSQL 实际执行。
 - 测试数据库连接：`postgresql://titan@127.0.0.1:55432/titan`。
 
 ## 2. 验证命令
@@ -24,7 +24,7 @@ DATABASE_URL=postgresql://titan@127.0.0.1:55432/titan pnpm build
 docker compose -f infra/docker-compose.yml config
 ```
 
-上述命令均以退出码 `0` 完成。
+上述命令均以退出码 `0` 完成；Control Plane 测试另外使用 `postgresql://titan:titan@127.0.0.1:55432/titan` 验证。
 
 ## 3. 测试覆盖
 

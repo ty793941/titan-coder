@@ -37,12 +37,15 @@ export class DatabaseService implements OnModuleDestroy {
 
   private async runInitializationScripts(): Promise<void> {
     const databaseDir = await this.resolveDatabaseDir();
-    for (const fileName of ['schema.sql', 'init-data.sql']) {
-      const content = await readFile(resolve(databaseDir, fileName), 'utf8');
-      for (const statement of content.split(';').map(value => value.trim()).filter(Boolean)) {
-        await sql.raw(statement).execute(this.db);
+    await this.db.transaction().execute(async trx => {
+      await sql`select pg_advisory_xact_lock(hashtext('titan_schema_init'))`.execute(trx);
+      for (const fileName of ['schema.sql', 'init-data.sql']) {
+        const content = await readFile(resolve(databaseDir, fileName), 'utf8');
+        for (const statement of content.split(';').map(value => value.trim()).filter(Boolean)) {
+          await sql.raw(statement).execute(trx);
+        }
       }
-    }
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
