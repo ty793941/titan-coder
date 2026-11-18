@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: titan
+      POSTGRES_USER: titan
+      POSTGRES_PASSWORD: titan
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U titan -d titan"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - titan-postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: titan
+      MINIO_ROOT_PASSWORD: titan-local-password
+    ports:
+      - "59000:9000"
+      - "59001:9001"
+    volumes:
+      - titan-minio-data:/data
+
+volumes:
+  titan-postgres-data:
+  titan-minio-data:

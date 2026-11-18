@@ -1,0 +1,31 @@
+{
+  "name": "@titan/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-fastify": "^11.1.6",
+    "@titan/contracts": "workspace:*",
+    "@titan/domain": "workspace:*",
+    "fastify": "^5.4.0",
+    "kysely": "^0.28.5",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/supertest": "^6.0.3",
+    "@types/pg": "^8.15.5",
+    "supertest": "^7.1.1"
+  }
+}
