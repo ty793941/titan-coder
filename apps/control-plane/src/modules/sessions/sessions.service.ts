@@ -5,6 +5,7 @@ import type { Session } from '@titan/domain';
 import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
+import { ArtifactsService } from '../artifacts/artifacts.service.js';
 
 @Injectable()
 export class SessionsService {
@@ -12,6 +13,7 @@ export class SessionsService {
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @Inject(IdempotencyService) private readonly idempotency: IdempotencyService,
     @Inject(EventsService) private readonly events: EventsService,
+    @Inject(ArtifactsService) private readonly artifacts: ArtifactsService,
   ) {}
 
   async create(taskId: string, input: unknown, headerKey?: string): Promise<Session> {
@@ -20,6 +22,9 @@ export class SessionsService {
     return this.database.db.transaction().execute(async trx => {
       const task = await trx.selectFrom('task').select(['id']).where('id', '=', taskId).executeTakeFirst();
       if (!task) throw new DomainError('RESOURCE_NOT_FOUND', `task ${taskId} was not found`);
+      if (parsed.planHash && !(await this.artifacts.hasApprovedPlan(taskId, parsed.planHash))) {
+        throw new DomainError('PLAN_HASH_STALE', `approved plan ${parsed.planHash} was not found`);
+      }
       const existing = await this.idempotency.read<Session>(trx, `task:${taskId}:session:create`, parsed.idempotencyKey, parsed);
       if (existing) return existing;
       const session: Session = {

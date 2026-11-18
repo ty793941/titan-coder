@@ -41,10 +41,10 @@
 以下内容仍是完整 Phase 1 的后续门禁，不影响当前 Foundation 验收通过：
 
 1. 接入真实 Codex App Server 和 Qwen Transport，并在本机 Daemon 中完成一次受控 Session。
-2. 增加 Control Plane Daemon 注册、心跳、撤销和事件 Outbox 同步 API。
-3. 将 SSE 从一次性历史读取扩展为持久订阅、序列断档检测和事件补拉。
+2. 将 Daemon 控制面同步扩展为跨进程实时调度和自动派发。
+3. 将 SSE 客户端补齐自动断线重连和断档补拉。
 4. 将 CLI 的 Session、Run Events、Daemon 命令接入实际 API。
-5. 为 Artifact 增加 Plan 批准门禁、版本评审和 `latest-approved` 读取规则。
+5. 将 Plan 批准扩展为多角色版本评审和完整人工门禁。
 
 ## 5. 回滚路径
 

@@ -29,7 +29,7 @@ export class HttpErrorFilter implements ExceptionFilter {
   private statusFor(code: string): number {
     if (code === 'RESOURCE_NOT_FOUND') return 404;
     if (code === 'PERMISSION_DENIED') return 403;
-    if (code === 'IDEMPOTENCY_CONFLICT' || code === 'VERSION_CONFLICT' || code === 'EVENT_SEQUENCE_GAP') return 409;
+    if (code === 'IDEMPOTENCY_CONFLICT' || code === 'VERSION_CONFLICT' || code === 'EVENT_SEQUENCE_GAP' || code === 'PLAN_HASH_STALE') return 409;
     return 400;
   }
 

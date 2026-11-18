@@ -54,19 +54,47 @@ export class ArtifactsService {
     });
   }
 
-  async list(taskId: string): Promise<Artifact[]> {
+  async approve(artifactId: string): Promise<Artifact> {
+    const row = await this.database.db.selectFrom('artifact').selectAll().where('artifact_id', '=', artifactId).executeTakeFirst();
+    if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `artifact ${artifactId} was not found`);
+    if (row.type !== 'plan') throw new DomainError('INVALID_STATE_TRANSITION', 'only plan artifacts can be approved by this gate');
+    await this.database.db.updateTable('artifact').set({ status: 'approved', review_state: 'approved' }).where('artifact_id', '=', artifactId).execute();
+    return this.toArtifact({ ...row, status: 'approved', review_state: 'approved' });
+  }
+
+  async list(taskId: string, resolution?: string): Promise<Artifact[]> {
     const rows = await this.database.db.selectFrom('artifact').selectAll().where('task_id', '=', taskId)
       .orderBy('created_at', 'asc').execute();
-    return rows.map(row => {
-      const artifact = {
+    const visibleRows = resolution === 'latest-approved'
+      ? [...rows.filter(row => row.status === 'approved' && row.review_state === 'approved')]
+        .sort((left, right) => right.version - left.version)
+        .filter((row, index, all) => all.findIndex(candidate => candidate.type === row.type) === index)
+      : rows;
+    return visibleRows.map(row => this.toArtifact(row));
+  }
+
+  async hasApprovedPlan(taskId: string, checksum: string): Promise<boolean> {
+    const row = await this.database.db.selectFrom('artifact').select('artifact_id')
+      .where('task_id', '=', taskId).where('type', '=', 'plan')
+      .where('checksum', '=', checksum).where('status', '=', 'approved')
+      .where('review_state', '=', 'approved').executeTakeFirst();
+    return Boolean(row);
+  }
+
+  private toArtifact(row: {
+    artifact_id: string; project_id: string; task_id: string; session_id: string | null;
+    type: string; version: number; schema_version: number; uri: string; checksum: string;
+    status: string; source_artifacts: unknown; created_by_type: string; created_by_id: string;
+    created_at: Date; review_state: string;
+  }): Artifact {
+    const artifact = {
       artifactId: row.artifact_id as Artifact['artifactId'], projectId: row.project_id as Artifact['projectId'],
       taskId: row.task_id as Artifact['taskId'], ...(row.session_id ? { sessionId: row.session_id as Artifact['sessionId'] } : {}),
       type: row.type as Artifact['type'], version: row.version, schemaVersion: row.schema_version,
       uri: row.uri, checksum: row.checksum as Artifact['checksum'], status: row.status as Artifact['status'],
       sourceArtifacts: row.source_artifacts as string[], createdBy: { type: row.created_by_type as Artifact['createdBy']['type'], id: row.created_by_id },
       createdAt: row.created_at.toISOString(), reviewState: row.review_state as Artifact['reviewState'],
-      };
-      return artifact as Artifact;
-    });
+    };
+    return artifact as Artifact;
   }
 }
