@@ -2,7 +2,7 @@
 
 > 版本：`0.1.0-phase1-foundation`
 >
-> 状态：`candidate`
+> 状态：`approved-foundation`
 
 ## 1. 包含内容
 
@@ -53,4 +53,4 @@ docker compose -f infra/docker-compose.yml config
 
 回滚时停止 API/Daemon，保留 PostgreSQL 数据和 Artifact 目录，恢复上一版本代码后重新执行兼容的 schema/init 脚本。旧 Artifact、旧 Run 和事件记录不覆盖删除。
 
-本交付包不包含 Web UI、云端 Session、真实外部系统同步、生产发布、完整 Temporal Worker、多人协作和 Marketplace。评审记录中的 `changes_requested` 项必须在下一轮完成后，才能将版本状态推进为 `approved`。
+本交付包不包含 Web UI、云端 Session、真实外部系统同步、生产发布、完整 Temporal Worker、多人协作和 Marketplace。完整 Phase 1 的后续门禁仍需在下一轮实现后单独验收。

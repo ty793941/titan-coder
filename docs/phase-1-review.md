@@ -2,7 +2,9 @@
 
 > 评审日期：2026-11-18
 >
-> 评审结论：`changes_requested`
+> 当前评审结论：`approve`（Phase 1 Foundation / Headless Vertical Slice）
+>
+> 完整 Phase 1 状态：`in_progress`
 
 ## 1. 需求覆盖
 
@@ -36,7 +38,7 @@
 
 ## 4. 需要后续变更的门禁
 
-当前评审请求补齐以下内容后再转为 `approve`：
+以下内容仍是完整 Phase 1 的后续门禁，不影响当前 Foundation 验收通过：
 
 1. 接入真实 Codex App Server 和 Qwen Transport，并在本机 Daemon 中完成一次受控 Session。
 2. 增加 Control Plane Daemon 注册、心跳、撤销和事件 Outbox 同步 API。
