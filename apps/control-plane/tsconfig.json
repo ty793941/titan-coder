@@ -9,6 +9,7 @@
   },
   "references": [
     { "path": "../../packages/contracts" },
+    { "path": "../../packages/daemon-protocol" },
     { "path": "../../packages/domain" }
   ],
   "include": ["src/**/*.ts"]

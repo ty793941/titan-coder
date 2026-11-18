@@ -97,6 +97,20 @@ CREATE TABLE IF NOT EXISTS daemon (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS daemon_outbox_event (
+  id TEXT PRIMARY KEY,
+  daemon_id TEXT NOT NULL REFERENCES daemon(id),
+  event_id TEXT NOT NULL,
+  sequence BIGINT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (daemon_id, event_id),
+  UNIQUE (daemon_id, sequence)
+);
+
 CREATE TABLE IF NOT EXISTS artifact (
   artifact_id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES project(id),
@@ -178,3 +192,4 @@ CREATE INDEX IF NOT EXISTS idx_run_session ON run(session_id);
 CREATE INDEX IF NOT EXISTS idx_event_run_sequence ON event(run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_event_task_sequence ON event(task_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_event(published_at) WHERE published_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_daemon_outbox_pending ON daemon_outbox_event(status) WHERE status = 'pending';

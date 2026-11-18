@@ -44,6 +44,9 @@ importers:
       '@titan/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@titan/daemon-protocol':
+        specifier: workspace:*
+        version: link:../../packages/daemon-protocol
       '@titan/domain':
         specifier: workspace:*
         version: link:../../packages/domain

@@ -18,3 +18,5 @@ VALUES (
   'active'
 )
 ON CONFLICT (id) DO NOTHING;
+
+-- Daemon rows are registered by the local execution service and are not seeded.

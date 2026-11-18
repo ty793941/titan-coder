@@ -37,9 +37,9 @@ docker compose -f infra/docker-compose.yml config
 | `@titan/daemon` | 工作区路径限制、Git Worktree、心跳重连 | 3 tests passed |
 | `@titan/cli` | Task JSON 输出和稳定错误码 | 2 tests passed |
 | `@titan/agent-runtime` | 无证据时 Goal 保持继续状态 | 1 test passed |
-| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE | 5 tests passed |
+| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE、Daemon 控制面 | 6 tests passed |
 
-全仓共报告 `25 tests passed`，无失败测试。
+全仓共报告 `26 tests passed`，无失败测试。
 
 ## 4. 端到端证据
 
@@ -61,3 +61,4 @@ docker compose -f infra/docker-compose.yml config
 - SSE 当前从 PostgreSQL 事件表读取已有事件并返回流，不包含完整的长期连接实时发布器和断线后的自动补拉客户端。
 - Artifact 内容使用本地受控目录，S3/MinIO 只保留基础设施配置，尚未接入对象存储适配器。
 - CLI 已实现 Task 创建和 Run 查询；Session、Run 事件订阅和 Daemon 管理命令仍需扩展。
+- Daemon 已支持控制面注册、心跳、撤销和事件 Outbox 去重；跨进程实时调度和 Daemon 自动派发仍需下一轮接入。

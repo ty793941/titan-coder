@@ -101,6 +101,31 @@ export interface ArtifactTable {
   review_state: string;
 }
 
+export interface DaemonTable {
+  id: string;
+  machine_name: string;
+  environment_type: string;
+  capabilities: JsonValue;
+  workspace_roots: JsonValue;
+  max_concurrent_sessions: number;
+  daemon_version: string;
+  status: string;
+  last_heartbeat_at: Date;
+  created_at: Date;
+}
+
+export interface DaemonOutboxEventTable {
+  id: string;
+  daemon_id: string;
+  event_id: string;
+  sequence: number;
+  event_type: string;
+  payload: JsonValue;
+  status: string;
+  retry_count: number;
+  created_at: Date;
+}
+
 export interface Database {
   organization: OrganizationTable;
   project: ProjectTable;
@@ -111,4 +136,6 @@ export interface Database {
   outbox_event: OutboxEventTable;
   idempotency_record: IdempotencyRecordTable;
   artifact: ArtifactTable;
+  daemon: DaemonTable;
+  daemon_outbox_event: DaemonOutboxEventTable;
 }

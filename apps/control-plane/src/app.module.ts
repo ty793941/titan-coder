@@ -13,10 +13,12 @@ import { SessionsController } from './modules/sessions/sessions.controller.js';
 import { SessionsService } from './modules/sessions/sessions.service.js';
 import { TasksController } from './modules/tasks/tasks.controller.js';
 import { TasksService } from './modules/tasks/tasks.service.js';
+import { DaemonsController } from './modules/daemons/daemons.controller.js';
+import { DaemonsService } from './modules/daemons/daemons.service.js';
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService],
 })
 export class AppModule {}
