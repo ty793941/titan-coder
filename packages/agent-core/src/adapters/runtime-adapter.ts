@@ -3,6 +3,8 @@ export type RuntimeName = 'codex' | 'qwen';
 export type RuntimeSessionConfig = {
   runtime: RuntimeName;
   credentialRef?: string;
+  modelRef?: string;
+  baseUrl?: string;
 };
 
 export type NativeSession = { id: string; runtime: RuntimeName };

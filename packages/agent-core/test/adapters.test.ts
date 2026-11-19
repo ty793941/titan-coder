@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CodexAdapter } from '../src/adapters/codex-adapter.js';
 import { QwenAdapter } from '../src/adapters/qwen-adapter.js';
+import { createCodexApiKeyAdapter, createQwenOfficialAdapter } from '../src/adapters/provider-adapters.js';
 
 describe('runtime adapters', () => {
   it('normalizes Codex App Server events', async () => {
@@ -22,5 +23,36 @@ describe('runtime adapters', () => {
       send: async function* () { yield { type: 'done' }; },
     });
     await expect(adapter.createSession({ runtime: 'qwen' })).rejects.toThrow('RUNTIME_ADAPTER_UNAVAILABLE');
+  });
+
+  it('creates a Qwen official adapter without exposing the API key in events', async () => {
+    const adapter = createQwenOfficialAdapter({
+      apiKey: 'qwen-secret',
+      fetcher: async (_input, init) => {
+        expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer qwen-secret');
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'hello' } }] }), { status: 200 });
+      },
+    });
+    const session = await adapter.createSession({ runtime: 'qwen', credentialRef: 'secret://qwen', modelRef: 'qwen-plus' });
+    const events = await Array.fromAsync(adapter.streamEvents(session));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text', payload: 'hello' }),
+      expect.objectContaining({ type: 'session.completed' }),
+    ]));
+    expect(JSON.stringify(events)).not.toContain('qwen-secret');
+  });
+
+  it('creates a Codex API key adapter with an injectable transport', async () => {
+    const adapter = createCodexApiKeyAdapter({
+      apiKey: 'codex-secret',
+      fetcher: async () => new Response(JSON.stringify({ output_text: 'done' }), { status: 200 }),
+    });
+    const session = await adapter.createSession({ runtime: 'codex', credentialRef: 'secret://codex', modelRef: 'gpt-5-codex' });
+    const events = await Array.fromAsync(adapter.streamEvents(session));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text', payload: 'done' }),
+      expect.objectContaining({ type: 'session.completed' }),
+    ]));
+    expect(JSON.stringify(events)).not.toContain('codex-secret');
   });
 });

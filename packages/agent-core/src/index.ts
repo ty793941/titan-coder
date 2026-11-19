@@ -9,3 +9,4 @@ export * from './adapters/runtime-adapter.js';
 export * from './adapters/fake-adapter.js';
 export * from './adapters/codex-adapter.js';
 export * from './adapters/qwen-adapter.js';
+export * from './adapters/provider-adapters.js';

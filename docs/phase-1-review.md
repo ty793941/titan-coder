@@ -40,7 +40,7 @@
 
 以下内容仍是完整 Phase 1 的后续门禁，不影响当前 Foundation 验收通过：
 
-1. 接入真实 Codex App Server 和 Qwen Transport，并在本机 Daemon 中完成一次受控 Session。
+1. 使用真实 Codex API Key 和 Qwen 官方 API 凭证，在本机 Daemon 中完成一次受控 Session。
 2. 将 Daemon 控制面同步扩展为跨进程实时调度和自动派发。
 3. 将 SSE 客户端补齐自动断线重连和断档补拉。
 4. 将 CLI 的 SSE 自动断线重连和断档补拉接入实际 API。

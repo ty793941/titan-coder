@@ -1,7 +1,7 @@
 import { DomainError } from '@titan/contracts';
 import type { CheckpointReference, NativeSession, RuntimeAdapter, RuntimeEvent, RuntimeInput, RuntimeSessionConfig } from './runtime-adapter.js';
 
-type CodexTransport = {
+export type CodexTransport = {
   create: (config: RuntimeSessionConfig) => Promise<{ id: string }>;
   events: (session: { id: string }) => AsyncIterable<{ type: string; payload?: unknown }>;
   send: (session: { id: string }, input: RuntimeInput) => Promise<void>;
@@ -24,6 +24,7 @@ export class CodexAdapter implements RuntimeAdapter {
     for await (const event of this.transport.events(session)) {
       if (event.type === 'turn.started') yield { type: 'session.started', payload: event.payload };
       else if (event.type === 'turn.completed') yield { type: 'session.completed', payload: event.payload };
+      else if (event.type === 'text') yield { type: 'text', payload: event.payload };
       else yield { type: 'model.streamed', payload: event.payload };
     }
   }

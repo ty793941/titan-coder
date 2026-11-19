@@ -1,19 +1,21 @@
 import { DomainError } from '@titan/contracts';
 import type { CheckpointReference, NativeSession, RuntimeAdapter, RuntimeEvent, RuntimeInput, RuntimeSessionConfig } from './runtime-adapter.js';
 
-type QwenTransport = { send: (session: NativeSession) => AsyncIterable<{ type: string; payload?: unknown }> };
+export type QwenTransport = { send: (session: NativeSession) => AsyncIterable<{ type: string; payload?: unknown }> };
 
 export class QwenAdapter implements RuntimeAdapter {
   constructor(private readonly transport: QwenTransport) {}
 
   async createSession(config: RuntimeSessionConfig): Promise<NativeSession> {
     if (!config.credentialRef) throw new DomainError('RUNTIME_ADAPTER_UNAVAILABLE', 'Qwen credential reference is required');
-    return { id: `qwen_${Date.now()}`, runtime: 'qwen' };
+    return { id: `qwen:${config.modelRef ?? 'qwen-plus'}`, runtime: 'qwen' };
   }
 
   async *streamEvents(session: NativeSession): AsyncIterable<RuntimeEvent> {
     for await (const event of this.transport.send(session)) {
-      yield event.type === 'done' ? { type: 'session.completed', payload: event.payload } : { type: 'model.streamed', payload: event.payload };
+      if (event.type === 'done') yield { type: 'session.completed', payload: event.payload };
+      else if (event.type === 'text') yield { type: 'text', payload: event.payload };
+      else yield { type: 'model.streamed', payload: event.payload };
     }
   }
 
