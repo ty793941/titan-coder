@@ -43,7 +43,7 @@
 1. 接入真实 Codex App Server 和 Qwen Transport，并在本机 Daemon 中完成一次受控 Session。
 2. 将 Daemon 控制面同步扩展为跨进程实时调度和自动派发。
 3. 将 SSE 客户端补齐自动断线重连和断档补拉。
-4. 将 CLI 的 Session、Run Events、Daemon 命令接入实际 API。
+4. 将 CLI 的 SSE 自动断线重连和断档补拉接入实际 API。
 5. 将 Plan 批准扩展为多角色版本评审和完整人工门禁。
 
 ## 5. 回滚路径

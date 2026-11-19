@@ -35,11 +35,11 @@ docker compose -f infra/docker-compose.yml config
 | `@titan/agent-core` | Permission、Hook、Tool 幂等、Goal、Checkpoint、Adapter | 7 tests passed |
 | `@titan/daemon-protocol` | Daemon 注册和事件信封字段 | 1 test passed |
 | `@titan/daemon` | 工作区路径限制、Git Worktree、心跳重连 | 3 tests passed |
-| `@titan/cli` | Task JSON 输出和稳定错误码 | 2 tests passed |
+| `@titan/cli` | Task、Session、Run Events、Daemon JSON 输出和稳定错误码 | 6 tests passed |
 | `@titan/agent-runtime` | 无证据时 Goal 保持继续状态 | 1 test passed |
-| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE、Daemon 控制面 | 6 tests passed |
+| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE、Daemon 控制面、Plan 门禁 | 8 tests passed |
 
-全仓共报告 `26 tests passed`，无失败测试。
+全仓共报告 `32 tests passed`，无失败测试。
 
 ## 4. 端到端证据
 
@@ -57,8 +57,8 @@ docker compose -f infra/docker-compose.yml config
 ## 5. 已知限制
 
 - Codex 和 Qwen Adapter 已完成统一接口、凭证引用检查和事件归一化；真实 Codex App Server/Qwen 网络 Transport 仍由宿主注入，未在自动化测试中调用外部模型服务。
-- Daemon 的工作区、Worktree、进程组和重连状态已可在本机包内验证；Control Plane 的 Daemon 注册/心跳 API 与跨进程事件 Outbox 仍需下一轮接入。
+- Daemon 的工作区、Worktree、进程组和重连状态已可在本机包内验证；Control Plane 已支持 Daemon 注册、心跳、撤销和事件 Outbox 去重，跨进程实时调度仍需下一轮接入。
 - SSE 已支持历史回放、`Last-Event-ID`、序列断档错误和 `follow=true` 持久轮询订阅；CLI 端的自动断线重连和补拉仍需下一轮接入。
 - Artifact 内容使用本地受控目录，S3/MinIO 只保留基础设施配置，尚未接入对象存储适配器。
-- CLI 已实现 Task 创建和 Run 查询；Session、Run 事件订阅和 Daemon 管理命令仍需扩展。
+- CLI 已实现 Task 创建、Session 创建、Run 查询、Run Events SSE、Daemon 注册/状态/撤销命令；自动断线重连和补拉仍需下一轮接入。
 - Daemon 已支持控制面注册、心跳、撤销和事件 Outbox 去重；跨进程实时调度和 Daemon 自动派发仍需下一轮接入。

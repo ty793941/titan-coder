@@ -1,6 +1,9 @@
 import { ApiClient, type ApiError } from './client.js';
 import { createTask } from './commands/task.js';
 import { getRun } from './commands/run.js';
+import { getRunEvents } from './commands/run.js';
+import { createSession } from './commands/session.js';
+import { getDaemon, registerDaemon, revokeDaemon } from './commands/daemon.js';
 
 export type CliResult = { exitCode: number; stdout: string };
 
@@ -11,8 +14,18 @@ export async function runCli(argv: string[]): Promise<CliResult> {
     const args = parseFlags(argv);
     const result = argv[0] === 'task' && argv[1] === 'create'
       ? await createTask(client, args)
+      : argv[0] === 'session' && argv[1] === 'create'
+        ? await createSession(client, argv[2] ?? '', args)
       : argv[0] === 'run' && argv[1] === 'get'
         ? await getRun(client, argv[2] ?? '')
+        : argv[0] === 'run' && argv[1] === 'events'
+          ? await getRunEvents(client, argv[2] ?? '', value(argv, '--last-event-id'))
+          : argv[0] === 'daemon' && argv[1] === 'status'
+            ? await getDaemon(client, argv[2] ?? '')
+            : argv[0] === 'daemon' && argv[1] === 'register'
+              ? await registerDaemon(client, args)
+            : argv[0] === 'daemon' && argv[1] === 'revoke'
+              ? await revokeDaemon(client, argv[2] ?? '')
         : (() => { throw new Error('unsupported command'); })();
     return { exitCode: 0, stdout: json ? JSON.stringify(result) : `${JSON.stringify(result)}\n` };
   } catch (error) {
