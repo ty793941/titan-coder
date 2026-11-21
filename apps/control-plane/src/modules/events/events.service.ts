@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Transaction } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 import type { EventEnvelope } from '@titan/contracts';
 import { DomainError } from '@titan/contracts';
 import type { Database, EventTable, JsonValue } from '../../database/types.js';
@@ -23,11 +23,13 @@ export class EventsService {
 
   async append<T extends JsonValue>(trx: Transaction<Database>, input: EventInput): Promise<EventEnvelope<T>> {
     const scopeKey = input.runId ? `run:${input.runId}` : input.taskId ? `task:${input.taskId}` : `project:${input.projectId}`;
+    await sql`select pg_advisory_xact_lock(hashtextextended(${scopeKey}, 0))`.execute(trx);
     const last = await trx.selectFrom('event')
       .select(({ fn }) => fn.max('sequence').as('max_sequence'))
       .where('scope_key', '=', scopeKey)
       .executeTakeFirst();
     const sequence = Number(last?.max_sequence ?? 0) + 1;
+    if (!Number.isSafeInteger(sequence)) throw new DomainError('EVENT_SEQUENCE_GAP', 'event sequence exceeds the supported range');
     const eventId = `evt_${randomUUID()}`;
     const row: EventTable = {
       event_id: eventId,
@@ -75,28 +77,39 @@ export class EventsService {
   }
 
   async listForRun(runId: string, afterSequence = 0): Promise<EventEnvelope[]> {
-    const latest = await this.database.db.selectFrom('event')
-      .select(({ fn }) => fn.max('sequence').as('max_sequence'))
-      .where('run_id', '=', runId)
-      .executeTakeFirst();
-    const maxSequence = Number(latest?.max_sequence ?? 0);
-    if (afterSequence > maxSequence) {
-      throw new DomainError('EVENT_SEQUENCE_GAP', `event cursor ${afterSequence} is ahead of run ${runId}`, {
-        latestSequence: maxSequence,
-      });
-    }
-    const rows = await this.database.db.selectFrom('event').selectAll()
-      .where('run_id', '=', runId).where('sequence', '>', afterSequence)
-      .orderBy('sequence', 'asc').execute();
-    return rows.map(row => this.toEnvelope(row));
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw new DomainError('VALIDATION_FAILED', 'event cursor must be a non-negative safe integer');
+    return this.database.db.transaction().setIsolationLevel('repeatable read').execute(async trx => {
+      const run = await trx.selectFrom('run').select('id').where('id', '=', runId).executeTakeFirst();
+      if (!run) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} not found`);
+      const latest = await trx.selectFrom('event')
+        .select(({ fn }) => fn.max('sequence').as('max_sequence'))
+        .where('run_id', '=', runId)
+        .executeTakeFirst();
+      const maxSequence = Number(latest?.max_sequence ?? 0);
+      if (!Number.isSafeInteger(maxSequence) || afterSequence > maxSequence) {
+        throw new DomainError('EVENT_SEQUENCE_GAP', `event cursor ${afterSequence} is ahead of run ${runId}`, { latestSequence: maxSequence });
+      }
+      const rows = await trx.selectFrom('event').selectAll()
+        .where('run_id', '=', runId).where('sequence', '>', afterSequence)
+        .orderBy('sequence', 'asc').execute();
+      const envelopes = rows.map(row => this.toEnvelope(row));
+      let expectedSequence = afterSequence + 1;
+      for (const event of envelopes) {
+        if (event.sequence !== expectedSequence) throw new DomainError('EVENT_SEQUENCE_GAP', `missing event sequence ${expectedSequence}`, { expectedSequence, receivedSequence: event.sequence, latestSequence: maxSequence });
+        expectedSequence += 1;
+      }
+      return envelopes;
+    });
   }
 
   private toEnvelope(row: EventTable): EventEnvelope {
+    const sequence = Number(row.sequence);
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new DomainError('EVENT_SEQUENCE_GAP', 'invalid stored event sequence');
     return {
       eventId: row.event_id as EventEnvelope['eventId'],
       eventType: row.event_type as EventEnvelope['eventType'],
       payloadVersion: row.payload_version,
-      sequence: row.sequence,
+      sequence,
       traceId: row.trace_id,
       projectId: row.project_id as EventEnvelope['projectId'],
       ...(row.task_id ? { taskId: row.task_id as EventEnvelope['taskId'] } : {}),

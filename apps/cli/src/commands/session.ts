@@ -2,7 +2,7 @@ import type { ApiClient } from '../client.js';
 
 export async function createSession(client: ApiClient, taskId: string, args: Record<string, string>): Promise<unknown> {
   const idempotencyKey = args.idempotencyKey ?? `cli-session-${Date.now()}`;
-  return client.request(`/api/tasks/${taskId}/sessions`, {
+  return client.request(`/api/tasks/${encodeURIComponent(taskId)}/sessions`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({
@@ -12,4 +12,8 @@ export async function createSession(client: ApiClient, taskId: string, args: Rec
       idempotencyKey,
     }),
   });
+}
+
+export function getSession(client: ApiClient, sessionId: string): Promise<unknown> {
+  return client.request(`/api/sessions/${encodeURIComponent(sessionId)}`);
 }

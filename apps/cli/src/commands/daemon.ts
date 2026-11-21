@@ -15,9 +15,13 @@ export function registerDaemon(client: ApiClient, args: Record<string, string>):
 }
 
 export function getDaemon(client: ApiClient, daemonId: string): Promise<unknown> {
-  return client.request(`/api/daemons/${daemonId}`);
+  return client.request(`/api/daemons/${encodeURIComponent(daemonId)}`);
 }
 
 export function revokeDaemon(client: ApiClient, daemonId: string): Promise<void> {
-  return client.request(`/api/daemons/${daemonId}/revoke`, { method: 'POST' }).then(() => undefined);
+  return client.request(`/api/daemons/${encodeURIComponent(daemonId)}/revoke`, { method: 'POST' });
+}
+
+export function heartbeatDaemon(client: ApiClient, daemonId: string): Promise<unknown> {
+  return client.request(`/api/daemons/${encodeURIComponent(daemonId)}/heartbeat`, { method: 'POST' });
 }
