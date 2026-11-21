@@ -127,8 +127,13 @@ CREATE TABLE IF NOT EXISTS artifact (
   created_by_id TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   review_state TEXT NOT NULL DEFAULT 'pending',
+  reference TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE (task_id, type, version)
 );
+
+ALTER TABLE artifact ADD COLUMN IF NOT EXISTS reference TEXT;
+ALTER TABLE artifact ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS checkpoint (
   id TEXT PRIMARY KEY,
@@ -226,3 +231,5 @@ CREATE TABLE IF NOT EXISTS execution_progress (
 
 CREATE INDEX IF NOT EXISTS idx_execution_job_daemon_status ON execution_job(daemon_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_checkpoint_run ON checkpoint(run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_uri_unique ON artifact(uri);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_reference_unique ON artifact(reference) WHERE reference IS NOT NULL;

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { beforeAll, afterAll, expect, it } from 'vitest';
 import { createApp } from '../dist/main.js';
@@ -57,7 +58,7 @@ async function fixture() {
   expect(daemon.body.authToken).toEqual(expect.any(String));
   const task = await request('/projects/project_dev/tasks', { title: 'execution', goal: 'execute', acceptanceCriteria: ['done'], priority: 'high', idempotencyKey: randomUUID() });
   const checksum = `sha256:${'a'.repeat(64)}`;
-  await db.insertInto('artifact').values({ artifact_id: `artifact_${randomUUID()}`, project_id: 'project_dev', task_id: task.body.id, session_id: null, type: 'plan', version: 1, schema_version: 1, uri: 'file:///tmp/plan', checksum, status: 'approved', source_artifacts: '[]', created_by_type: 'user', created_by_id: 'test', created_at: new Date(), review_state: 'approved' }).execute();
+  await db.insertInto('artifact').values({ artifact_id: `artifact_${randomUUID()}`, project_id: 'project_dev', task_id: task.body.id, session_id: null, type: 'plan', version: 1, schema_version: 1, uri: `file:///tmp/plan-${randomUUID()}`, checksum, status: 'approved', source_artifacts: '[]', created_by_type: 'user', created_by_id: 'test', created_at: new Date(), review_state: 'approved', reference: null, metadata: '{}' }).execute();
   const config = { daemonId: daemon.body.daemonId, runtime: 'codex', credentialRef: 'keychain:test', workspacePath: '/tmp/titan/repo', allowedTools: ['workspace.read'], maxTurns: 10, timeoutMs: 60000 };
   const session = await request(`/tasks/${task.body.id}/sessions`, { entryAgent: 'project-manager', goal: 'execute', planHash: checksum, execution: config, idempotencyKey: randomUUID() });
   expect(session.status).toBe(201);
@@ -214,4 +215,120 @@ it('blocks an obsolete queued plan without starving newer valid jobs on the same
   expect(claim.body).toMatchObject({ runId: nextRun.body.id, planHash: nextChecksum });
   expect((await request(`/runs/${f.run.id}`)).body).toMatchObject({ status: 'waiting_input', errorCode: 'PLAN_HASH_STALE' });
   expect((await request(`/daemons/${f.daemon.daemonId}/runs/${f.run.id}/job`, undefined, f.daemon.authToken)).body.status).toBe('blocked');
+});
+
+it('expires a lost claim, releases the slot, and requires a manual retry from its checkpoint', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  const checkpoint = { id: `checkpoint_${randomUUID()}`, messages: [], successfulTools: [], evidence: [] };
+  const progress = { eventId: randomUUID(), sequence: 1, claimToken: claim.body.claimToken, type: 'checkpoint', payload: {}, checkpoint };
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, progress, f.daemon.authToken)).status).toBe(200);
+  await db.updateTable('execution_job').set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', f.run.id).execute();
+
+  const nextSession = await request(`/tasks/${f.task.id}/sessions`, { entryAgent: 'project-manager', goal: 'manual retry', planHash: f.checksum, execution: f.config, idempotencyKey: randomUUID() });
+  const nextRun = await request(`/sessions/${nextSession.body.id}/runs`, { idempotencyKey: randomUUID() });
+  const recovered = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+
+  expect(recovered.status).toBe(200);
+  expect(recovered.body.runId).toBe(nextRun.body.id);
+  expect((await request(`/runs/${f.run.id}`)).body).toMatchObject({ status: 'paused', checkpointId: checkpoint.id });
+  expect((await request(`${daemonPath}/runs/${f.run.id}/job`, undefined, f.daemon.authToken)).body).toMatchObject({ status: 'blocked' });
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, { ...progress, eventId: randomUUID(), sequence: 2, type: 'completed' }, f.daemon.authToken)).status).toBe(403);
+
+  await request(`/runs/${f.run.id}/cancel`, {});
+  const retry = await request(`/sessions/${f.session.id}/runs`, { checkpointId: checkpoint.id, idempotencyKey: randomUUID() });
+  expect(retry.status).toBe(201);
+  expect(retry.body.checkpointId).toBe(checkpoint.id);
+});
+
+it('renews an active claim through authenticated control polling only while the daemon is ready', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  await db.updateTable('execution_job').set({ lease_expires_at: new Date(Date.now() + 1000) }).where('run_id', '=', f.run.id).execute();
+  const before = await db.selectFrom('execution_job').select('lease_expires_at').where('run_id', '=', f.run.id).executeTakeFirstOrThrow();
+  const refreshed = await request(`${daemonPath}/runs/${f.run.id}/control`, undefined, f.daemon.authToken);
+  const after = await db.selectFrom('execution_job').select('lease_expires_at').where('run_id', '=', f.run.id).executeTakeFirstOrThrow();
+  expect(refreshed.body).toMatchObject({ cancelRequested: false, status: 'queued' });
+  expect(after.lease_expires_at?.getTime()).toBeGreaterThan(before.lease_expires_at?.getTime() ?? 0);
+
+  await db.updateTable('daemon').set({ last_heartbeat_at: new Date(Date.now() - 40000) }).where('id', '=', f.daemon.daemonId).execute();
+  const beforeStalePoll = await db.selectFrom('execution_job').select('lease_expires_at').where('run_id', '=', f.run.id).executeTakeFirstOrThrow();
+  await request(`${daemonPath}/runs/${f.run.id}/control`, undefined, f.daemon.authToken);
+  const afterStalePoll = await db.selectFrom('execution_job').select('lease_expires_at').where('run_id', '=', f.run.id).executeTakeFirstOrThrow();
+  expect(afterStalePoll.lease_expires_at?.getTime()).toBe(beforeStalePoll.lease_expires_at?.getTime());
+  expect(claim.body.claimToken).toEqual(expect.any(String));
+});
+
+it('acknowledges a late terminal progress event as cancelled after cancellation without accepting it', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  await request(`/runs/${f.run.id}/cancel`, {});
+  await db.updateTable('execution_job').set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', f.run.id).execute();
+  const late = await request(`${daemonPath}/runs/${f.run.id}/progress`, {
+    eventId: randomUUID(), sequence: 1, claimToken: claim.body.claimToken, type: 'completed', payload: { status: 'completed' },
+  }, f.daemon.authToken);
+  expect(late.body).toEqual({ accepted: false, status: 'cancelled', cancelRequested: true });
+});
+
+it('records artifact metadata, tool output audit, and hook or tool executions from progress', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  const artifactUuid = randomUUID();
+  const artifactPath = `${f.config.workspacePath}/.titan/artifacts/${artifactUuid}/answer.md`;
+  const artifactOutput = {
+    kind: 'artifact', reference: `artifact://${artifactUuid}/answer.md`, uri: pathToFileURL(artifactPath).toString(),
+    checksum: `sha256:${'e'.repeat(64)}`, artifactType: 'source-diff', output: 'written',
+  };
+  const checkpoint = {
+    id: `checkpoint_${randomUUID()}`, messages: [],
+    successfulTools: [{ id: 'artifact-write-1', name: 'artifact.write', inputHash: 'hash', output: artifactOutput }], evidence: [],
+  };
+  const checkpointProgress = { eventId: randomUUID(), sequence: 1, claimToken: claim.body.claimToken, type: 'checkpoint', payload: {}, checkpoint };
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, checkpointProgress, f.daemon.authToken)).status).toBe(200);
+  const outputProgress = {
+    eventId: randomUUID(), sequence: 2, claimToken: claim.body.claimToken, type: 'output',
+    payload: { source: 'tool', status: 'completed', toolName: 'artifact.write', toolCallId: 'artifact-write-1', output: { ...artifactOutput, apiKey: 'must-not-persist', text: 'Bearer secret-token' } },
+  };
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, outputProgress, f.daemon.authToken)).status).toBe(200);
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, {
+    eventId: randomUUID(), sequence: 3, claimToken: claim.body.claimToken, type: 'output',
+    payload: { source: 'hook', status: 'completed', toolName: 'post-artifact', toolCallId: 'hook-1', output: { result: 'ok' } },
+  }, f.daemon.authToken)).status).toBe(200);
+
+  const artifact = await db.selectFrom('artifact').selectAll().where('reference', '=', artifactOutput.reference).executeTakeFirst();
+  expect(artifact).toMatchObject({ project_id: 'project_dev', task_id: f.task.id, session_id: f.session.id, type: 'source-diff', uri: artifactOutput.uri, checksum: artifactOutput.checksum, version: 1 });
+  expect(artifact?.metadata).toMatchObject({ kind: 'artifact', reference: artifactOutput.reference, output: 'written' });
+  expect(await db.selectFrom('tool_call').selectAll().where('run_id', '=', f.run.id).executeTakeFirst()).toMatchObject({ tool_use_id: 'artifact-write-1', tool_name: 'artifact.write', status: 'completed' });
+  expect(await db.selectFrom('hook_execution').selectAll().where('run_id', '=', f.run.id).executeTakeFirst()).toMatchObject({ hook_name: 'post-artifact', status: 'completed' });
+  const audit = await db.selectFrom('audit_log').selectAll().where('target_id', '=', 'artifact-write-1').executeTakeFirstOrThrow();
+  expect(JSON.stringify(audit.payload)).not.toContain('must-not-persist');
+  expect(JSON.stringify(audit.payload)).not.toContain('secret-token');
+  expect((await db.selectFrom('event').select('event_type').where('run_id', '=', f.run.id).execute()).map(row => row.event_type)).toContain('artifact.created');
+  const listed = await request(`/tasks/${f.task.id}/artifacts`);
+  expect(listed.body).toEqual(expect.arrayContaining([expect.objectContaining({ reference: artifactOutput.reference, metadata: expect.objectContaining({ artifactType: 'source-diff' }) })]));
+});
+
+it('accepts failed progress error code from either payload.errorCode or payload.code', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  expect((await request(`${daemonPath}/runs/${f.run.id}/progress`, {
+    eventId: randomUUID(), sequence: 1, claimToken: claim.body.claimToken, type: 'failed', payload: { code: 'RUNTIME_PROVIDER_FAILED' },
+  }, f.daemon.authToken)).status).toBe(200);
+  expect((await request(`/runs/${f.run.id}`)).body.errorCode).toBe('RUNTIME_PROVIDER_FAILED');
+});
+
+it('rejects oversized checkpoint messages before persisting user content', async () => {
+  const f = await fixture();
+  const daemonPath = `/daemons/${f.daemon.daemonId}`;
+  const claim = await request(`${daemonPath}/claim`, {}, f.daemon.authToken);
+  const response = await request(`${daemonPath}/runs/${f.run.id}/progress`, {
+    eventId: randomUUID(), sequence: 1, claimToken: claim.body.claimToken, type: 'checkpoint', payload: {},
+    checkpoint: { id: `checkpoint_${randomUUID()}`, messages: [{ role: 'user', text: 'x'.repeat(1_100_000) }], successfulTools: [], evidence: [] },
+  }, f.daemon.authToken);
+  expect(response.status).toBe(413);
 });

@@ -103,6 +103,8 @@ export interface ArtifactTable {
   created_by_id: string;
   created_at: Date;
   review_state: string;
+  reference: string | null;
+  metadata: JsonValue;
 }
 
 export interface DaemonTable {
@@ -151,6 +153,37 @@ export interface ExecutionProgressTable {
   created_at: Generated<Date>;
 }
 
+export interface ToolCallTable {
+  id: string;
+  run_id: string;
+  tool_use_id: string;
+  tool_name: string;
+  status: string;
+  result: JsonValue | null;
+  created_at: Generated<Date>;
+}
+
+export interface HookExecutionTable {
+  id: string;
+  run_id: string;
+  hook_name: string;
+  status: string;
+  duration_ms: number;
+  created_at: Generated<Date>;
+}
+
+export interface AuditLogTable {
+  id: string;
+  actor_type: string;
+  actor_id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  trace_id: string;
+  payload: JsonValue;
+  created_at: Generated<Date>;
+}
+
 export interface DaemonOutboxEventTable {
   id: string;
   daemon_id: string;
@@ -178,4 +211,7 @@ export interface Database {
   execution_job: ExecutionJobTable;
   execution_progress: ExecutionProgressTable;
   checkpoint: CheckpointTable;
+  tool_call: ToolCallTable;
+  hook_execution: HookExecutionTable;
+  audit_log: AuditLogTable;
 }

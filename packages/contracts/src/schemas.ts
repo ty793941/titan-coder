@@ -48,10 +48,27 @@ export const executionConfigSchema = z.object({
 
 export const executionCheckpointSchema = z.object({
   id: identifier,
-  messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().max(1000000) }).strict()).max(10000),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().max(32768) }).strict()).max(1000),
   successfulTools: z.array(z.object({ id: identifier, name: identifier, inputHash: identifier, output: z.unknown() }).strict()
-    .refine(value => Object.prototype.hasOwnProperty.call(value, 'output'), { message: 'output is required', path: ['output'] })).max(10000),
-  evidence: z.array(z.object({ kind: identifier, reference: z.string().max(10000) }).strict()).max(10000),
+    .refine(value => Object.prototype.hasOwnProperty.call(value, 'output'), { message: 'output is required', path: ['output'] })).max(1000),
+  evidence: z.array(z.object({ kind: identifier, reference: z.string().max(10000) }).strict()).max(1000),
+}).strict();
+
+export const artifactWriteOutputSchema = z.object({
+  kind: z.literal('artifact'),
+  reference: z.string().regex(/^artifact:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/.+$/i),
+  uri: z.string().url(),
+  checksum: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  artifactType: artifactTypeSchema.default('source-diff'),
+  output: z.literal('written'),
+}).strict();
+
+export const progressOutputSchema = z.object({
+  source: z.enum(['hook', 'tool']),
+  status: boundedText.max(100),
+  toolName: identifier,
+  toolCallId: identifier,
+  output: z.unknown(),
 }).strict();
 
 export const runProgressSchema = z.object({
@@ -129,6 +146,8 @@ export const artifactSchema = z.object({
   createdBy: z.object({ type: z.enum(['user', 'agent', 'daemon', 'system']), id: identifier }),
   createdAt: z.string().datetime({ offset: true }),
   reviewState: z.enum(['pending', 'approved', 'changes_requested']),
+  reference: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export type ProjectCreateRequest = z.infer<typeof projectCreateRequestSchema>;

@@ -17,6 +17,7 @@ export const errorCodes = [
   'CHECKPOINT_NOT_FOUND',
   'RUNTIME_ADAPTER_UNAVAILABLE',
   'EVENT_SEQUENCE_GAP',
+  'EXECUTION_LEASE_EXPIRED',
 ] as const;
 
 export type ErrorCode = (typeof errorCodes)[number];
