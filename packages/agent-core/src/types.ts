@@ -24,9 +24,12 @@ export type HookContext = {
   phase: HookPhase;
   name?: string;
   toolName?: string;
+  toolCallId?: string;
   runId?: string;
   input?: unknown;
   output?: unknown;
+  workspacePath?: string;
+  secretValues?: string[];
 };
 
 export type Hook = {
@@ -42,6 +45,9 @@ export type ToolContext = {
   approvalToken?: string;
   allowedTools?: string[];
   workspacePath?: string;
+  signal?: AbortSignal;
+  secretValues?: string[];
+  trustedCode?: boolean;
 };
 
 export type ToolManifest = {
@@ -97,4 +103,27 @@ export type AgentRunInput = {
   maxTurns?: number;
   signal?: AbortSignal;
   checkpoint?: ExecutionCheckpoint;
+  secretValues?: string[];
+  trustedCode?: boolean;
+};
+
+export type HookAuditEvent = {
+  source: 'hook';
+  status: 'started' | 'allowed' | 'denied' | 'failed';
+  hookName: string;
+  phase: HookPhase;
+  toolName?: string;
+  toolCallId?: string;
+  runId?: string;
+  reason?: string;
+};
+
+export type ToolAuditEvent = {
+  source: 'tool';
+  status: 'started' | 'success' | 'replayed' | 'failed' | 'uncertain' | 'blocked';
+  toolName: string;
+  toolCallId: string;
+  runId?: string;
+  inputHash?: string;
+  reason?: string;
 };

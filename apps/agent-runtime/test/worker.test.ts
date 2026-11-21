@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
 import type { NativeSession, RuntimeAdapter, RuntimeEvent, RuntimeInput, RuntimeSessionConfig } from '@titan/agent-core';
@@ -60,12 +61,15 @@ describe('Runtime worker', () => {
     expect(progress.every(event => event.eventId)).toBe(true);
     expect(new Set(progress.map(event => event.eventId)).size).toBe(progress.length);
     expect(progress.map(event => event.sequence)).toEqual(progress.map((_event, index) => index + 1));
-    const artifact = await readFile(join(root, '.titan', 'artifacts', 'answer.txt'), 'utf8');
+    expect(progress.some(event => event.payload.source === 'hook')).toBe(true);
+    expect(progress.some(event => event.payload.source === 'tool')).toBe(true);
+    const artifactOutput = progress.find(event => event.type === 'checkpoint')?.checkpoint?.successfulTools[0]?.output as { uri: string; reference: string; checksum: string };
+    const artifact = await readFile(fileURLToPath(artifactOutput.uri), 'utf8');
     expect(artifact).toBe('answer');
     expect(progress.at(-1)).toMatchObject({ type: 'completed', payload: { status: 'completed' } });
-    expect(progress.at(-1)?.payload.evidence).toEqual([{ kind: 'artifact', reference: 'artifact://answer.txt' }]);
+    expect(progress.at(-1)?.payload.evidence).toEqual([{ kind: 'artifact', reference: artifactOutput.reference }]);
     expect(Object.keys(progress.find(event => event.type === 'checkpoint')?.checkpoint ?? {}).sort()).toEqual(['evidence', 'id', 'messages', 'successfulTools']);
-    const allowedPayloadKeys = new Set(['text', 'code', 'message', 'status', 'turn', 'toolCallId', 'toolName', 'reference', 'evidence', 'output', 'result', 'checkpointId']);
+    const allowedPayloadKeys = new Set(['source', 'text', 'code', 'message', 'status', 'turn', 'toolCallId', 'toolName', 'hookName', 'reference', 'evidence', 'output', 'result', 'checkpointId', 'inputHash', 'reason']);
     expect(progress.every(event => Object.keys(event.payload).every(key => allowedPayloadKeys.has(key)))).toBe(true);
   });
 
@@ -87,11 +91,14 @@ describe('Runtime worker', () => {
     const first = new FixtureAdapter();
     const firstResult = await executeDispatch(dispatch({ config: { ...dispatch().config, workspacePath: root } }), { adapterFactory: () => first, credentialResolver: async () => 'fixture-secret', sendProgress: () => undefined });
     expect(firstResult.checkpoint).toBeDefined();
-    await unlink(join(root, '.titan', 'artifacts', 'answer.txt'));
+    const firstArtifact = firstResult.checkpoint?.successfulTools[0]?.output as { uri: string; reference: string };
+    await unlink(fileURLToPath(firstArtifact.uri));
     const second = new FixtureAdapter();
     const secondResult = await executeDispatch(dispatch({ config: { ...dispatch().config, workspacePath: root }, checkpoint: firstResult.checkpoint }), { adapterFactory: () => second, credentialResolver: async () => 'fixture-secret', sendProgress: () => undefined });
     expect(secondResult.status).toBe('satisfied');
-    await expect(readFile(join(root, '.titan', 'artifacts', 'answer.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const secondArtifact = secondResult.checkpoint?.successfulTools[0]?.output as { uri: string; reference: string };
+    await expect(readFile(fileURLToPath(secondArtifact.uri), 'utf8')).resolves.toBe('answer');
+    expect(secondArtifact.reference).not.toBe(firstArtifact.reference);
     expect(firstResult.checkpoint?.successfulTools[0]?.inputHash).toBe(hashToolInput({ path: 'answer.txt', content: 'answer' }));
   });
 

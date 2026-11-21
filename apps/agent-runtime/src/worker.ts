@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AgentLoop, FileCheckpointStore, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
-import type { RuntimeAdapter, RuntimeSessionConfig } from '@titan/agent-core';
+import { AgentLoop, containsSensitive, containsSensitivePath, containsUnsafePath, FileCheckpointStore, FileToolExecutionLedger, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
+import type { Hook, RuntimeAdapter, RuntimeSessionConfig } from '@titan/agent-core';
 import { createCodexApiKeyAdapter, createQwenOfficialAdapter } from '@titan/agent-core';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
 import type { AgentRunResult } from '@titan/agent-core';
@@ -18,10 +18,30 @@ export type WorkerDependencies = {
   signal?: AbortSignal;
 };
 
-const payloadKeys = new Set(['text', 'code', 'message', 'status', 'turn', 'toolCallId', 'toolName', 'reference', 'evidence', 'output', 'result', 'checkpointId']);
+const payloadKeys = new Set(['source', 'text', 'code', 'message', 'status', 'turn', 'toolCallId', 'toolName', 'hookName', 'reference', 'evidence', 'output', 'result', 'checkpointId', 'inputHash', 'reason']);
 
-function safePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(payload).filter(([key]) => payloadKeys.has(key)));
+function safePayload(payload: Record<string, unknown>, secretValues: string[]): Record<string, unknown> {
+  const safe = Object.fromEntries(Object.entries(payload).filter(([key]) => payloadKeys.has(key)));
+  for (const secret of secretValues.filter(Boolean)) {
+    for (const [key, value] of Object.entries(safe)) if (typeof value === 'string') safe[key] = value.split(secret).join('[REDACTED]');
+  }
+  return safe;
+}
+
+function runtimeSafetyHooks(): Hook[] {
+  return [{
+    name: 'runtime-input-output-safety', phase: 'before', priority: 1, blocking: true,
+    run: async context => {
+      if (containsSensitive(context.input, context.secretValues) || containsSensitivePath(context.input) || containsUnsafePath(context.input, context.workspacePath)) return 'deny';
+      return 'allow';
+    },
+  }, {
+    name: 'runtime-output-safety', phase: 'after', priority: 1, blocking: true,
+    run: async context => {
+      if (containsSensitive(context.output, context.secretValues) || containsSensitivePath(context.output) || containsUnsafePath(context.output, context.workspacePath)) return 'deny';
+      return 'allow';
+    },
+  }];
 }
 
 function adapterFor(config: RuntimeSessionConfig, credential: string): RuntimeAdapter {
@@ -31,9 +51,10 @@ function adapterFor(config: RuntimeSessionConfig, credential: string): RuntimeAd
 
 export async function executeDispatch(dispatch: RunDispatch, dependencies: WorkerDependencies = {}): Promise<AgentRunResult> {
   let sequence = 0;
+  let secretValues: string[] = [];
   const send = dependencies.sendProgress ?? (progress => { if (process.send && process.connected) process.send({ type: 'progress', progress }); });
   const emit = (type: RunProgress['type'], payload: Record<string, unknown>, checkpoint?: RunProgress['checkpoint']): void => {
-    const progress: RunProgress = { eventId: randomUUID(), sequence: ++sequence, claimToken: dispatch.claimToken, type, payload: safePayload(payload), ...(checkpoint ? { checkpoint } : {}) };
+    const progress: RunProgress = { eventId: randomUUID(), sequence: ++sequence, claimToken: dispatch.claimToken, type, payload: safePayload(payload, secretValues), ...(checkpoint ? { checkpoint } : {}) };
     send(progress);
   };
   emit('running', { status: 'running' });
@@ -44,6 +65,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
   }
   const credentialResolver = dependencies.credentialResolver ?? resolveCredential;
   const credential = await credentialResolver(dispatch.config.credentialRef);
+  if (credential) secretValues = [credential];
   if (dependencies.signal?.aborted) {
     const result: AgentRunResult = { status: 'cancelled', replayedToolUseIds: [], evidence: [], error: 'run cancelled' };
     emit('cancelled', { status: 'cancelled', message: 'run cancelled' });
@@ -65,10 +87,15 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     tools: runtimeToolSpecs.filter(tool => dispatch.config.allowedTools.includes(tool.name)),
   };
   const adapter = dependencies.adapterFactory ? dependencies.adapterFactory(adapterConfig, credential) : adapterFor(adapterConfig, credential);
+  const emitAudit = (event: { source: 'hook' | 'tool'; status: string; toolName?: string; toolCallId?: string; hookName?: string; reason?: string; inputHash?: string }): void => {
+    emit('output', { source: event.source, status: event.status, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}), ...(event.hookName ? { hookName: event.hookName } : {}), ...(event.reason ? { reason: event.reason } : {}), ...(event.inputHash ? { inputHash: event.inputHash } : {}) });
+  };
   const permissions = new PermissionEngine(dispatch.config.allowedTools.map(action => ({ source: 'run' as const, action, resource: dispatch.runId, decision: 'allow' as const })));
-  const tools = new ToolRegistry({ permission: permissions, hooks: new HookRunner([]) });
+  const hooks = new HookRunner(runtimeSafetyHooks(), { onAudit: emitAudit });
+  const ledgerRoot = join(dispatch.config.workspacePath, '.titan', 'tool-ledger');
+  const tools = new ToolRegistry({ permission: permissions, hooks, ledger: new FileToolExecutionLedger(ledgerRoot, dispatch.config.workspacePath), onAudit: emitAudit });
   for (const tool of createRuntimeTools()) tools.register(tool);
-  const checkpoints = new FileCheckpointStore(dependencies.checkpointRoot ?? join(dispatch.config.workspacePath, '.titan', 'checkpoints'));
+  const checkpoints = new FileCheckpointStore(dependencies.checkpointRoot ?? join(dispatch.config.workspacePath, '.titan', 'checkpoints'), dispatch.config.workspacePath, secretValues);
   const loop = new AgentLoop({
     adapter,
     tools,
@@ -77,7 +104,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     toolSpecs: runtimeToolSpecs.filter(tool => dispatch.config.allowedTools.includes(tool.name)),
     onProgress: progress => {
       if (progress.type === 'checkpoint') emit('checkpoint', { checkpointId: progress.checkpoint?.id, evidence: progress.checkpoint?.evidence ?? [] }, progress.checkpoint);
-      else if (progress.type === 'tool') emit('output', progress.payload);
+      else if (progress.type === 'tool') emit('output', { source: 'tool', status: 'requested', ...progress.payload });
       else emit('output', progress.payload);
     },
   });
@@ -93,6 +120,8 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     maxTurns: dispatch.config.maxTurns,
     ...(dependencies.signal ? { signal: dependencies.signal } : {}),
     ...(dispatch.checkpoint ? { checkpoint: dispatch.checkpoint } : {}),
+    secretValues,
+    trustedCode: (dispatch.config as RunDispatch['config'] & { localPolicy?: { trustedCode?: boolean } }).localPolicy?.trustedCode === true,
   });
   const checkpoint = result.checkpoint;
   if (result.status === 'satisfied') emit('completed', { status: 'completed', evidence: result.evidence, ...(checkpoint ? { checkpointId: checkpoint.id } : {}) }, checkpoint);

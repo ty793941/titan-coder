@@ -25,7 +25,7 @@ export class CodexStdioRpc {
     for (const name of ['PATH', 'HOME', 'TMPDIR', 'USER', 'SHELL', 'LANG', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE']) {
       if (process.env[name] !== undefined) env[name] = process.env[name];
     }
-    this.child = spawn(executable, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn(executable, args, { cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     this.exited = new Promise(resolve => this.child.once('close', () => resolve()));
     this.child.on('error', () => this.fail(providerError('Codex', 'App Server process unavailable')));
     this.child.on('exit', (code, signal) => this.fail(providerError('Codex', 'App Server exited', { exitCode: code, signal })));
@@ -83,9 +83,25 @@ export class CodexStdioRpc {
       this.stopping = (async () => {
         this.fail(providerError('Codex', 'session closed'));
         this.child.stdin.destroy();
-        this.child.kill('SIGTERM');
-        const timer = setTimeout(() => this.child.kill('SIGKILL'), 250);
-        try { await this.exited; } finally { clearTimeout(timer); }
+        this.killGroup('SIGTERM');
+        let forced: ReturnType<typeof setTimeout> | undefined;
+        let bounded: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            this.exited,
+            new Promise<void>(resolve => {
+              forced = setTimeout(() => {
+                this.killGroup('SIGKILL');
+                bounded = setTimeout(resolve, 500);
+              }, 250);
+            }),
+          ]);
+        } finally {
+          clearTimeout(forced);
+          clearTimeout(bounded);
+          this.child.stdout.destroy();
+          this.child.stderr.destroy();
+        }
       })();
     }
     return this.stopping;
@@ -95,6 +111,12 @@ export class CodexStdioRpc {
     if (this.failure) throw this.failure;
     try { this.child.stdin.write(`${JSON.stringify(message)}\n`); }
     catch { this.fail(providerError('Codex', 'App Server write failed')); }
+  }
+
+  private killGroup(signal: NodeJS.Signals): void {
+    if (!this.child.pid) return;
+    try { if (process.platform !== 'win32') process.kill(-this.child.pid, signal); else this.child.kill(signal); }
+    catch { this.child.kill(signal); }
   }
 
   private fail(error: Error): void {

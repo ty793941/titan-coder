@@ -10,6 +10,7 @@ import { createCodexApiKeyAdapter } from '../src/adapters/provider-adapters.js';
 const serverScript = String.raw`
 const { createInterface } = require('node:readline');
 const { existsSync } = require('node:fs');
+const { spawn } = require('node:child_process');
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 let initialized = false, loggedIn = false, turn = 0, thread;
 let approvalId;
@@ -48,7 +49,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'initialized') { initialized = true; return; }
   if (method === 'account/login/start') {
     if (!initialized || p.type !== 'apiKey' || p.apiKey !== 'secret-test-key') return fail();
-    if (!process.argv.includes('cli_auth_credentials_store="ephemeral"')) return fail();
+    if (!process.argv.includes('cli_auth_credentials_store="ephemeral"') || !process.argv.includes('features.shell_tool=false') || !process.argv.includes('tools.view_image=false')) return fail();
     if (existsSync(process.env.CODEX_HOME + '/auth.json')) process.exit(24);
     loggedIn = true;
     return ok({ type: 'apiKey' });
@@ -73,7 +74,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode === 'rpc-error') return send({ method: 'turn/completed', params: { threadId: thread, turn: { id: current, status: 'failed', error: { message: 'secret-test-key' } } } });
     if (mode === 'approval') return send({ id: 'approval', method: 'item/commandExecution/requestApproval', params: { threadId: thread, turnId: current } });
     if (mode === 'tool' || mode === 'unknown-tool') return send({ id: 'tool', method: 'item/tool/call', params: { threadId: thread, turnId: current, callId: 'call-1', tool: mode === 'tool' ? 'lookup' : 'unregistered', arguments: { q: 'hello' } } });
-    const delta = mode === 'resources' ? JSON.stringify({ home: process.env.CODEX_HOME, pid: process.pid, args: process.argv, keyEnv: process.env.OPENAI_API_KEY }) : p.input[0].text + ':' + p.model;
+    const descendant = mode === 'descendant' ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }) : undefined;
+    const delta = mode === 'resources' ? JSON.stringify({ home: process.env.CODEX_HOME, pid: process.pid, args: process.argv, keyEnv: process.env.OPENAI_API_KEY }) : mode === 'descendant' ? JSON.stringify({ descendantPid: descendant.pid }) : p.input[0].text + ':' + p.model;
     send({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId: current, delta } });
     send({ method: 'turn/completed', params: { threadId: thread, turn: { id: current, status: 'completed' } } });
     return;
@@ -220,6 +222,15 @@ describe('Codex App Server stdio provider', () => {
     await expect(stat(resources.home)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(() => process.kill(resources.pid, 0)).toThrow();
     await adapter.close(session);
+  });
+
+  it('kills descendants in the Codex process group within the bounded close wait', async () => {
+    const { adapter, session } = await fixture('descendant');
+    await adapter.sendInput(session, { text: 'descendant' });
+    const events = await Array.fromAsync(adapter.streamEvents(session));
+    const descendantPid = JSON.parse(events.find(event => event.type === 'text')!.payload as string).descendantPid as number;
+    await adapter.close(session);
+    expect(() => process.kill(descendantPid, 0)).toThrow();
   });
 
   it.runIf(process.env.TITAN_CODEX_BINARY)('accepts ephemeral API-key login in the actual installed Codex without creating credential files', async () => {

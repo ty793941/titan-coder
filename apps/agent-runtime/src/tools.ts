@@ -1,26 +1,32 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
+import { containsSensitive, containsSensitivePath, ensureSafeDirectory } from '@titan/agent-core';
 import type { RuntimeToolSpec, ToolManifest, ToolContext } from '@titan/agent-core';
 
 const textInput = z.object({ path: z.string().min(1) });
+const artifactInput = z.object({ path: z.string().min(1), content: z.string(), artifactType: z.enum(['source-diff', 'test-report', 'spec', 'review', 'release-package']).default('source-diff') });
 const writeInput = z.object({ path: z.string().min(1), content: z.string() });
 const searchInput = z.object({ query: z.string().min(1), path: z.string().optional() });
 const commandInput = z.object({ command: z.array(z.string()).min(1), timeoutMs: z.number().int().positive().max(120_000).optional() });
 const MAX_OUTPUT = 32 * 1024;
+const MAX_SEARCH_BYTES = 1024 * 1024;
+const TEST_FILE_PATTERN = /(?:^|[./])[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 
 function relativeReference(root: string, target: string, prefix: string): string {
   return `${prefix}://${relative(root, target).split(sep).join('/')}`;
 }
 
-async function safeTarget(root: string, requested: string, allowMissing: boolean): Promise<{ target: string; reference: string }> {
+async function safeTarget(root: string, requested: string, allowMissing: boolean, createParents: boolean): Promise<{ target: string; reference: string }> {
   if (isAbsolute(requested) || requested.includes('\0')) throw new Error('path must be relative');
   const normalizedRoot = await realpath(root);
   const target = resolve(normalizedRoot, requested);
   const targetRelative = relative(normalizedRoot, target);
   if (targetRelative.startsWith(`..${sep}`) || targetRelative === '..') throw new Error('path escapes workspace');
+  if (target === normalizedRoot) return { target, reference: relativeReference(normalizedRoot, target, 'workspace') };
   const parentPath = dirname(target);
   const parentPathRelative = relative(normalizedRoot, parentPath);
   let current = normalizedRoot;
@@ -30,8 +36,8 @@ async function safeTarget(root: string, requested: string, allowMissing: boolean
       const metadata = await lstat(current);
       if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error('workspace path contains an unsafe parent');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      await mkdir(current);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !createParents) throw error;
+      await mkdir(current, { mode: 0o700 });
     }
   }
   const parent = await realpath(parentPath);
@@ -47,38 +53,59 @@ async function safeTarget(root: string, requested: string, allowMissing: boolean
 }
 
 async function atomicWrite(target: string, content: string): Promise<void> {
-  await mkdir(dirname(target), { recursive: true });
+  const existing = await lstat(target).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
+  const mode = existing && !existing.isSymbolicLink() ? existing.mode & 0o777 : 0o600;
   const temporary = join(dirname(target), `.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 });
+    await writeFile(temporary, content, { encoding: 'utf8', mode });
     await rename(temporary, target);
   } finally {
     await unlink(temporary).catch(() => undefined);
   }
 }
 
-function checksum(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+function checksum(content: string): string { return `sha256:${createHash('sha256').update(content).digest('hex')}`; }
+
+function rejectUnsafeWrite(input: { path: string; content: string }, context: ToolContext): void {
+  if (containsSensitive(input, context.secretValues) || containsSensitivePath(input)) throw new Error('secret content or sensitive path is blocked');
 }
 
-async function search(root: string, directory: string, query: string, output: string[]): Promise<void> {
-  if (output.length >= 100) return;
+async function search(root: string, directory: string, query: string, output: string[], budget: { bytes: number }): Promise<void> {
+  if (output.length >= 100 || budget.bytes >= MAX_SEARCH_BYTES || Buffer.byteLength(JSON.stringify(output)) >= MAX_OUTPUT) return;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name === '.git' || entry.name === 'node_modules') continue;
     const target = join(directory, entry.name);
     if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) await search(root, target, query, output);
+    if (entry.isDirectory()) await search(root, target, query, output, budget);
     else if (entry.isFile()) {
+      const metadata = await stat(target);
+      if (metadata.size > MAX_SEARCH_BYTES - budget.bytes) continue;
       const content = await readFile(target, 'utf8').catch(() => '');
+      budget.bytes += Buffer.byteLength(content);
       if (content.includes(query)) output.push(relativeReference(root, target, 'workspace'));
+      if (output.length >= 100 || budget.bytes >= MAX_SEARCH_BYTES || Buffer.byteLength(JSON.stringify(output)) >= MAX_OUTPUT) return;
     }
   }
 }
 
 function commandAllowed(command: string[]): boolean {
-  if (command[0] === 'pnpm') return command[1] === 'test' && command.length === 2;
-  if (command[0] === 'node' || command[0] === process.execPath) return command[1] === '--test' && command.slice(2).every(arg => !/[;&|$`<>\n\r]/.test(arg));
+  if (command[0] === 'pnpm') return command.length === 2 && command[1] === 'test';
+  if (command[0] === 'node' || command[0] === process.execPath) return command[1] === '--test' && command.length > 2 && command.slice(2).every(arg => !arg.startsWith('-') && !arg.includes(':') && !isAbsolute(arg) && !arg.split(/[\\/]/).includes('..'));
   return false;
+}
+
+function killGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (!child.pid) return;
+  try { if (process.platform !== 'win32') process.kill(-child.pid, signal); else child.kill(signal); } catch { child.kill(signal); }
+}
+
+async function validateNodeTestFiles(root: string, args: string[]): Promise<void> {
+  for (const arg of args) {
+    if (!TEST_FILE_PATTERN.test(arg)) throw new Error('node --test arguments must be workspace-relative test files');
+    const target = await safeTarget(root, arg, false, false);
+    const metadata = await lstat(target.target);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error('node --test argument is not a regular file');
+  }
 }
 
 async function runTest(context: ToolContext, input: z.infer<typeof commandInput>): Promise<unknown> {
@@ -86,24 +113,36 @@ async function runTest(context: ToolContext, input: z.infer<typeof commandInput>
   const executable = input.command[0];
   const args = input.command.slice(1);
   if (!executable) throw new Error('test command is empty');
-  return await new Promise((resolveResult, reject) => {
-    const child = spawn(executable, args, { cwd: context.workspacePath, shell: false, env: { PATH: process.env.PATH ?? '' }, stdio: 'pipe' });
+  if (executable === 'pnpm' && context.trustedCode !== true) throw new Error('pnpm test requires explicit trusted-code local policy');
+  if (executable === 'node' || executable === process.execPath) await validateNodeTestFiles(context.workspacePath, input.command.slice(2));
+  return await new Promise((resolveResult, rejectResult) => {
+    const child = spawn(executable, args, { cwd: context.workspacePath, shell: false, detached: process.platform !== 'win32', env: { PATH: process.env.PATH ?? '' }, stdio: 'pipe' });
     let output = '';
-    const collect = (chunk: Buffer) => { output = `${output}${chunk.toString('utf8')}`.slice(-MAX_OUTPUT); };
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    const collect = (chunk: Buffer) => { output = Buffer.from(`${output}${chunk.toString('utf8')}`).subarray(-MAX_OUTPUT).toString('utf8'); };
+    const finish = (callback: () => void) => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(forceTimer); clearTimeout(hardTimer); context.signal?.removeEventListener('abort', abort); callback(); };
+    const terminate = () => { killGroup(child, 'SIGTERM'); forceTimer = setTimeout(() => { killGroup(child, 'SIGKILL'); hardTimer = setTimeout(() => finish(() => rejectResult(new Error('test command termination timed out'))), 500); }, 250); };
+    const abort = () => { aborted = true; terminate(); };
+    let forceTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => { timedOut = true; terminate(); }, input.timeoutMs ?? 30_000);
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
-    const timer = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('test command timed out')); }, input.timeoutMs ?? 30_000);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', code => {
-      clearTimeout(timer);
+    context.signal?.addEventListener('abort', abort, { once: true });
+    child.once('error', error => finish(() => rejectResult(error)));
+    child.once('close', code => finish(() => {
+      if (aborted) return rejectResult(new Error('test command aborted'));
+      if (timedOut) return rejectResult(new Error('test command timed out'));
       const passed = code === 0;
       resolveResult({ kind: 'test', reference: `test://${input.command.join(' ')}`, status: passed ? 'passed' : 'failed', output, result: passed ? 'passed' : `exit:${code ?? 'unknown'}` });
-    });
+    }));
   });
 }
 
 export const runtimeToolSpecs: RuntimeToolSpec[] = [
-  { name: 'artifact.write', description: 'Write a reviewable artifact inside the workspace artifact directory.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } },
+  { name: 'artifact.write', description: 'Write a reviewable artifact inside the workspace artifact directory.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, artifactType: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } },
   { name: 'workspace.read', description: 'Read a UTF-8 file inside the authorized workspace.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } },
   { name: 'workspace.search', description: 'Search UTF-8 files inside the authorized workspace.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'], additionalProperties: false } },
   { name: 'workspace.write', description: 'Atomically write a UTF-8 file inside the authorized workspace.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } },
@@ -113,15 +152,18 @@ export const runtimeToolSpecs: RuntimeToolSpec[] = [
 export function createRuntimeTools(): ToolManifest[] {
   return [
     {
-      name: 'artifact.write', version: 1, input: writeInput,
+      name: 'artifact.write', version: 1, input: artifactInput,
       execute: async (raw, context) => {
         if (!context.workspacePath) throw new Error('workspace is required');
-        const input = writeInput.parse(raw);
-        const root = join(context.workspacePath, '.titan', 'artifacts');
-        await mkdir(root, { recursive: true });
-        const { target } = await safeTarget(root, input.path, true);
+        const input = artifactInput.parse(raw);
+        rejectUnsafeWrite(input, context);
+        const artifactRoot = await ensureSafeDirectory(join(context.workspacePath, '.titan', 'artifacts'), context.workspacePath);
+        const version = randomUUID();
+        const versionRoot = join(artifactRoot, version);
+        await mkdir(versionRoot, { mode: 0o700 });
+        const { target } = await safeTarget(versionRoot, input.path, true, true);
         await atomicWrite(target, input.content);
-        return { kind: 'artifact', reference: relativeReference(await realpath(root), target, 'artifact'), checksum: checksum(input.content), output: 'written' };
+        return { kind: 'artifact', reference: relativeReference(artifactRoot, target, 'artifact'), uri: pathToFileURL(target).href, checksum: checksum(input.content), artifactType: input.artifactType, output: 'written' };
       },
     },
     {
@@ -129,8 +171,9 @@ export function createRuntimeTools(): ToolManifest[] {
       execute: async (raw, context) => {
         if (!context.workspacePath) throw new Error('workspace is required');
         const input = textInput.parse(raw);
-        const { target, reference } = await safeTarget(context.workspacePath, input.path, false);
-        return { reference, text: await readFile(target, 'utf8') };
+        const { target, reference } = await safeTarget(context.workspacePath, input.path, false, false);
+        const content = await readFile(target, 'utf8');
+        return { reference, text: Buffer.from(content).subarray(0, MAX_OUTPUT).toString('utf8') };
       },
     },
     {
@@ -138,10 +181,10 @@ export function createRuntimeTools(): ToolManifest[] {
       execute: async (raw, context) => {
         if (!context.workspacePath) throw new Error('workspace is required');
         const input = searchInput.parse(raw);
-        const root = context.workspacePath;
-        const directory = input.path ? (await safeTarget(root, input.path, false)).target : await realpath(root);
+        const root = await realpath(context.workspacePath);
+        const directory = input.path ? (await safeTarget(root, input.path, false, false)).target : root;
         const matches: string[] = [];
-        await search(await realpath(root), directory, input.query, matches);
+        await search(root, directory, input.query, matches, { bytes: 0 });
         return { result: matches };
       },
     },
@@ -150,7 +193,8 @@ export function createRuntimeTools(): ToolManifest[] {
       execute: async (raw, context) => {
         if (!context.workspacePath) throw new Error('workspace is required');
         const input = writeInput.parse(raw);
-        const { target, reference } = await safeTarget(context.workspacePath, input.path, true);
+        rejectUnsafeWrite(input, context);
+        const { target, reference } = await safeTarget(context.workspacePath, input.path, true, true);
         await atomicWrite(target, input.content);
         return { reference, checksum: checksum(input.content), bytes: Buffer.byteLength(input.content), output: 'written' };
       },

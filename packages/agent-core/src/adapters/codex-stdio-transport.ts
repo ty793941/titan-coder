@@ -87,6 +87,8 @@ export class CodexStdioTransport implements CodexTransport {
         '-c', 'sandbox_mode="read-only"',
         '-c', 'approval_policy="never"',
         '-c', 'shell_environment_policy.inherit="none"',
+        '-c', 'features.shell_tool=false',
+        '-c', 'tools.view_image=false',
       ], cwd, home, timeoutMs,
       message => { if (state) this.onMessage(state, message); },
       error => {

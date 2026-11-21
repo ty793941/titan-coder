@@ -13,7 +13,7 @@ describe('ToolRegistry', () => {
         { name: 'pre', phase: 'before', priority: 1, run: async () => { calls.push('pre'); return 'allow'; } },
         { name: 'post', phase: 'after', priority: 1, run: async () => { calls.push('post'); return 'allow'; } },
       ]),
-      onAudit: () => { calls.push('audit'); },
+      onAudit: event => { if (event.status === 'success') calls.push('audit'); },
     });
     registry.register({
       name: 'test.echo', version: 1, input: z.object({ value: z.string() }),
