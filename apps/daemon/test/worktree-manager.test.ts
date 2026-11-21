@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -21,5 +21,14 @@ describe('WorktreeManager', () => {
     const worktree = await manager.create({ repositoryPath, branchName: 'task/task_1' });
     expect(worktree.branchName).toBe('task/task_1');
     expect(worktree.baseRevision).toMatch(/^[0-9a-f]+$/);
+    expect(await readFile(join(worktree.path, 'README.md'), 'utf8')).toBe('Titan\n');
+    await expect(manager.create({ repositoryPath, branchName: '--invalid' })).rejects.toMatchObject({ code: 'WORKSPACE_CONFLICT' });
+    await expect(manager.create({ repositoryPath, branchName: 'bad name' })).rejects.toMatchObject({ code: 'WORKSPACE_CONFLICT' });
+    const results = await Promise.allSettled([
+      manager.create({ repositoryPath, branchName: 'task/concurrent' }),
+      manager.create({ repositoryPath, branchName: 'task/concurrent' }),
+    ]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
   });
 });
