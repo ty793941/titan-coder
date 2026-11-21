@@ -34,6 +34,7 @@ describe('runtime adapters', () => {
       },
     });
     const session = await adapter.createSession({ runtime: 'qwen', credentialRef: 'secret://qwen', modelRef: 'qwen-plus' });
+    await adapter.sendInput(session, { text: 'hello' });
     const events = await Array.fromAsync(adapter.streamEvents(session));
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'text', payload: 'hello' }),
@@ -42,17 +43,11 @@ describe('runtime adapters', () => {
     expect(JSON.stringify(events)).not.toContain('qwen-secret');
   });
 
-  it('creates a Codex API key adapter with an injectable transport', async () => {
+  it('rejects a missing Codex executable rather than using the Responses API', async () => {
     const adapter = createCodexApiKeyAdapter({
       apiKey: 'codex-secret',
-      fetcher: async () => new Response(JSON.stringify({ output_text: 'done' }), { status: 200 }),
+      executable: '/missing/titan-codex',
     });
-    const session = await adapter.createSession({ runtime: 'codex', credentialRef: 'secret://codex', modelRef: 'gpt-5-codex' });
-    const events = await Array.fromAsync(adapter.streamEvents(session));
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'text', payload: 'done' }),
-      expect.objectContaining({ type: 'session.completed' }),
-    ]));
-    expect(JSON.stringify(events)).not.toContain('codex-secret');
+    await expect(adapter.createSession({ runtime: 'codex', credentialRef: 'secret://codex' })).rejects.toThrow('RUNTIME_ADAPTER_UNAVAILABLE');
   });
 });

@@ -25,6 +25,7 @@ export class CodexAdapter implements RuntimeAdapter {
       if (event.type === 'turn.started') yield { type: 'session.started', payload: event.payload };
       else if (event.type === 'turn.completed') yield { type: 'session.completed', payload: event.payload };
       else if (event.type === 'text') yield { type: 'text', payload: event.payload };
+      else if (event.type === 'tool.requested') yield { type: 'tool.requested', payload: event.payload };
       else yield { type: 'model.streamed', payload: event.payload };
     }
   }

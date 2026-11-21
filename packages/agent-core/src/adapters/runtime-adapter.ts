@@ -5,11 +5,18 @@ export type RuntimeSessionConfig = {
   credentialRef?: string;
   modelRef?: string;
   baseUrl?: string;
+  cwd?: string;
+  workspace?: string;
+  tools?: RuntimeToolSpec[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  budget?: { maxOutputTokens?: number };
 };
 
+export type RuntimeToolSpec = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type NativeSession = { id: string; runtime: RuntimeName };
 export type CheckpointReference = { id: string };
-export type RuntimeInput = { text: string };
+export type RuntimeInput = { text: string; toolResults?: Array<{ id: string; output: string; isError?: boolean }>; signal?: AbortSignal };
 export type NativeRuntimeEvent = { type: string; payload?: unknown };
 export type RuntimeEvent = { type: 'session.started' | 'session.completed' | 'model.started' | 'model.streamed' | 'tool.requested' | 'text' | 'completed'; payload?: unknown };
 
