@@ -24,9 +24,9 @@ describe('Artifact approval gate', () => {
 
     const session = await api.post(`/api/tasks/${task.body.id}/sessions`)
       .set('Idempotency-Key', `session-${suffix}`)
-      .send({ entryAgent: 'project-manager', goal: '使用批准计划', planHash: plan.checksum, idempotencyKey: `session-${suffix}` })
+      .send({ entryAgent: 'project-manager', goal: '使用批准计划', planHash: plan.body.checksum, idempotencyKey: `session-${suffix}` })
       .expect(201);
-    expect(session.body.planHash).toBe(plan.checksum);
+    expect(session.body.planHash).toBe(plan.body.checksum);
     await api.close();
   });
 

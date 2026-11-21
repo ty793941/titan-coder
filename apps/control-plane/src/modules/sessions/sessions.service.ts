@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { Inject, Injectable } from '@nestjs/common';
 import { DomainError, sessionCreateRequestSchema } from '@titan/contracts';
 import type { Session } from '@titan/domain';
@@ -6,6 +7,7 @@ import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
 import { ArtifactsService } from '../artifacts/artifacts.service.js';
+import { latestApprovedPlan, validateExecution } from '../daemons/execution-policy.js';
 
 @Injectable()
 export class SessionsService {
@@ -17,16 +19,19 @@ export class SessionsService {
   ) {}
 
   async create(taskId: string, input: unknown, headerKey?: string): Promise<Session> {
-    const source = input as { idempotencyKey?: string };
+    const source = z.record(z.unknown()).parse(input === undefined ? {} : input);
     const parsed = sessionCreateRequestSchema.parse({ ...source, idempotencyKey: headerKey ?? source.idempotencyKey });
     return this.database.db.transaction().execute(async trx => {
       const task = await trx.selectFrom('task').select(['id']).where('id', '=', taskId).executeTakeFirst();
       if (!task) throw new DomainError('RESOURCE_NOT_FOUND', `task ${taskId} was not found`);
-      if (parsed.planHash && !(await this.artifacts.hasApprovedPlan(taskId, parsed.planHash))) {
-        throw new DomainError('PLAN_HASH_STALE', `approved plan ${parsed.planHash} was not found`);
-      }
       const existing = await this.idempotency.read<Session>(trx, `task:${taskId}:session:create`, parsed.idempotencyKey, parsed);
       if (existing) return existing;
+      if (parsed.execution && !parsed.planHash) throw new DomainError('PLAN_HASH_STALE', 'execution requires an approved plan');
+      if (parsed.planHash) await latestApprovedPlan(trx, taskId, parsed.planHash);
+      if (parsed.execution) {
+        if (parsed.daemonId && parsed.daemonId !== parsed.execution.daemonId) throw new DomainError('VALIDATION_FAILED', 'daemonId must match execution.daemonId');
+        await validateExecution(trx, parsed.execution);
+      }
       const session: Session = {
         id: `session_${randomUUID()}` as Session['id'],
         taskId: taskId as Session['taskId'],
@@ -38,6 +43,7 @@ export class SessionsService {
       await trx.insertInto('session').values({
         id: session.id, task_id: session.taskId, entry_agent: session.entryAgent,
         status: session.status, plan_hash: session.planHash ?? null, version: 1,
+        execution_config: parsed.execution ? JSON.stringify(parsed.execution) : null, goal: parsed.goal,
         created_at: new Date(session.createdAt),
       }).execute();
       const taskProject = await trx.selectFrom('task').select(['project_id']).where('id', '=', taskId).executeTakeFirstOrThrow();

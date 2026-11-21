@@ -35,20 +35,66 @@ export const taskCreateRequestSchema = z.object({
   idempotencyKey: idempotencyKey.optional(),
 });
 
+export const executionConfigSchema = z.object({
+  daemonId: identifier,
+  runtime: z.enum(['codex', 'qwen']),
+  credentialRef: identifier,
+  modelRef: identifier.optional(),
+  workspacePath: z.string().min(1).max(4096),
+  allowedTools: z.array(identifier).max(100),
+  maxTurns: z.number().int().positive().max(10000),
+  timeoutMs: z.number().int().positive().max(86400000),
+}).strict();
+
+export const executionCheckpointSchema = z.object({
+  id: identifier,
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().max(1000000) }).strict()).max(10000),
+  successfulTools: z.array(z.object({ id: identifier, name: identifier, inputHash: identifier, output: z.unknown() }).strict()
+    .refine(value => Object.prototype.hasOwnProperty.call(value, 'output'), { message: 'output is required', path: ['output'] })).max(10000),
+  evidence: z.array(z.object({ kind: identifier, reference: z.string().max(10000) }).strict()).max(10000),
+}).strict();
+
+export const runProgressSchema = z.object({
+  eventId: identifier,
+  sequence: z.number().int().positive().safe(),
+  claimToken: identifier,
+  type: z.enum(['running', 'output', 'checkpoint', 'completed', 'failed', 'cancelled', 'waiting_input']),
+  payload: z.record(z.unknown()),
+  checkpoint: executionCheckpointSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.type === 'checkpoint' && !value.checkpoint) context.addIssue({ code: z.ZodIssueCode.custom, message: 'checkpoint is required', path: ['checkpoint'] });
+});
+
+export const daemonRegistrationSchema = z.object({
+  machineName: identifier,
+  environmentType: z.enum(['local', 'cloud']),
+  capabilities: z.array(identifier).max(100),
+  workspaceRoots: z.array(z.string().min(1).max(4096)).min(1).max(100),
+  maxConcurrentSessions: z.number().int().positive().max(1000),
+  daemonVersion: identifier,
+}).strict();
+
+export const daemonEventSchema = z.object({
+  daemonId: identifier.optional(),
+  eventId: identifier, sequence: z.number().int().positive().safe(),
+  eventType: identifier, payload: z.record(z.unknown()),
+}).strict();
+
 export const sessionCreateRequestSchema = z.object({
   entryAgent: z.literal('project-manager'),
   goal: boundedText,
   planHash: z.string().trim().min(1).max(200).optional(),
   daemonId: identifier.optional(),
+  execution: executionConfigSchema.optional(),
   idempotencyKey,
-});
+}).strict();
 
 export const runCreateRequestSchema = z.object({
   inputSnapshotId: identifier.optional(),
   checkpointId: identifier.optional(),
   planHash: z.string().trim().min(1).max(200).optional(),
   idempotencyKey,
-});
+}).strict();
 
 export const eventEnvelopeSchema = z.object({
   eventId: identifier,

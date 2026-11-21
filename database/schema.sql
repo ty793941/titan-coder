@@ -193,3 +193,36 @@ CREATE INDEX IF NOT EXISTS idx_event_run_sequence ON event(run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_event_task_sequence ON event(task_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_event(published_at) WHERE published_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_daemon_outbox_pending ON daemon_outbox_event(status) WHERE status = 'pending';
+
+-- 执行配置、令牌摘要和队列均持久保存，历史 CRUD 数据保持不变。
+ALTER TABLE session ADD COLUMN IF NOT EXISTS execution_config JSONB;
+ALTER TABLE session ADD COLUMN IF NOT EXISTS goal TEXT;
+ALTER TABLE daemon ADD COLUMN IF NOT EXISTS auth_token_hash TEXT;
+
+CREATE TABLE IF NOT EXISTS execution_job (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL UNIQUE REFERENCES run(id),
+  daemon_id TEXT NOT NULL REFERENCES daemon(id),
+  plan_hash TEXT NOT NULL,
+  plan_snapshot JSONB NOT NULL,
+  config JSONB NOT NULL,
+  goal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  claim_token_hash TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  last_sequence BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS execution_progress (
+  event_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES execution_job(id),
+  sequence BIGINT NOT NULL,
+  request_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (job_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_job_daemon_status ON execution_job(daemon_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_run ON checkpoint(run_id);

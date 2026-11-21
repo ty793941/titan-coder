@@ -16,24 +16,28 @@ describe('Control Plane daemon API', () => {
     }).expect(201);
 
     expect(registration.body.status).toBe('ready');
+    const authorization = `Bearer ${registration.body.authToken}`;
     const heartbeat = await api.post(`/api/daemons/${registration.body.daemonId}/heartbeat`)
+      .set('Authorization', authorization)
       .send({ sequence: 1 })
       .expect(200);
     expect(heartbeat.body.status).toBe('ready');
 
     const event = {
       eventId: `daemon-event-${suffix}`,
+      daemonId: registration.body.daemonId,
       sequence: 1,
       eventType: 'session.progressed',
       payload: { message: 'running' },
     };
-    await api.post(`/api/daemons/${registration.body.daemonId}/events`).send(event).expect(201);
-    await api.post(`/api/daemons/${registration.body.daemonId}/events`).send(event).expect(200);
-    const events = await api.get(`/api/daemons/${registration.body.daemonId}/events`).expect(200);
+    await api.post(`/api/daemons/${registration.body.daemonId}/events`).set('Authorization', authorization).send(event).expect(201);
+    await api.post(`/api/daemons/${registration.body.daemonId}/events`).set('Authorization', authorization).send(event).expect(200);
+    await api.post(`/api/daemons/${registration.body.daemonId}/events`).set('Authorization', authorization).send({ ...event, daemonId: 'daemon_other' }).expect(403);
+    const events = await api.get(`/api/daemons/${registration.body.daemonId}/events`).set('Authorization', authorization).expect(200);
     expect(events.body).toHaveLength(1);
     expect(events.body[0].eventId).toBe(event.eventId);
 
-    await api.post(`/api/daemons/${registration.body.daemonId}/revoke`).expect(204);
+    await api.post(`/api/daemons/${registration.body.daemonId}/revoke`).set('Authorization', authorization).expect(204);
     const revoked = await api.get(`/api/daemons/${registration.body.daemonId}`).expect(200);
     expect(revoked.body.status).toBe('revoked');
     await api.close();

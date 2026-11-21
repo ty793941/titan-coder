@@ -20,9 +20,13 @@ describe('Phase 1 headless vertical slice', () => {
       .send({ idempotencyKey: `run-${suffix}-1` })
       .expect(201);
     await api.post(`/api/runs/${failedRun.body.id}/fail`).send({ errorCode: 'TOOL_EXECUTION_FAILED' }).expect(204);
+    const checkpointId = `checkpoint_${suffix}`;
+    await api.db.insertInto('checkpoint').values({ id: checkpointId, run_id: failedRun.body.id, sequence: 1,
+      snapshot: JSON.stringify({ id: checkpointId, messages: [], successfulTools: [], evidence: [] }),
+    }).execute();
     const resumedRun = await api.post(`/api/sessions/${session.body.id}/runs`)
       .set('Idempotency-Key', `run-${suffix}-2`)
-      .send({ idempotencyKey: `run-${suffix}-2`, checkpointId: 'checkpoint_phase_1' })
+      .send({ idempotencyKey: `run-${suffix}-2`, checkpointId })
       .expect(201);
     await api.post(`/api/runs/${resumedRun.body.id}/complete`).expect(204);
 

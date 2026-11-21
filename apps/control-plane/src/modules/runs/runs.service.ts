@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { Inject, Injectable } from '@nestjs/common';
-import { DomainError, runCreateRequestSchema } from '@titan/contracts';
+import { DomainError, executionConfigSchema, runCreateRequestSchema } from '@titan/contracts';
 import type { Run } from '@titan/domain';
 import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
+import { latestApprovedPlan, validateExecution } from '../daemons/execution-policy.js';
 
 @Injectable()
 export class RunsService {
@@ -15,13 +17,29 @@ export class RunsService {
   ) {}
 
   async create(sessionId: string, input: unknown, headerKey?: string): Promise<Run> {
-    const source = input as { idempotencyKey?: string };
+    const source = z.record(z.unknown()).parse(input === undefined ? {} : input);
     const parsed = runCreateRequestSchema.parse({ ...source, idempotencyKey: headerKey ?? source.idempotencyKey });
     return this.database.db.transaction().execute(async trx => {
-      const session = await trx.selectFrom('session').select(['id', 'task_id']).where('id', '=', sessionId).executeTakeFirst();
+      const session = await trx.selectFrom('session').selectAll().where('id', '=', sessionId).forUpdate().executeTakeFirst();
       if (!session) throw new DomainError('RESOURCE_NOT_FOUND', `session ${sessionId} was not found`);
       const existing = await this.idempotency.read<Run>(trx, `session:${sessionId}:run:create`, parsed.idempotencyKey, parsed);
       if (existing) return existing;
+      if (parsed.planHash && parsed.planHash !== session.plan_hash) throw new DomainError('PLAN_HASH_STALE', 'run plan must match the session plan');
+      const plan = session.plan_hash ? await latestApprovedPlan(trx, session.task_id, session.plan_hash) : undefined;
+      const config = session.execution_config ? executionConfigSchema.parse(session.execution_config) : undefined;
+      if (config) {
+        if (!plan) throw new DomainError('PLAN_HASH_STALE', 'execution requires an approved plan');
+        await validateExecution(trx, config);
+      }
+      if (parsed.checkpointId) {
+        const checkpoint = await trx.selectFrom('checkpoint').innerJoin('run', 'run.id', 'checkpoint.run_id')
+          .select(['checkpoint.id', 'run.session_id']).where('checkpoint.id', '=', parsed.checkpointId).executeTakeFirst();
+        if (!checkpoint) throw new DomainError('RESOURCE_NOT_FOUND', 'checkpoint was not found');
+        if (checkpoint.session_id !== sessionId) throw new DomainError('VALIDATION_FAILED', 'checkpoint belongs to another session');
+      }
+      const active = await trx.selectFrom('run').select('id').where('session_id', '=', sessionId)
+        .where('status', 'in', ['queued', 'starting', 'running', 'waiting_input', 'paused']).executeTakeFirst();
+      if (config && active) throw new DomainError('VERSION_CONFLICT', 'session already has an active run');
       const lastRun = await trx.selectFrom('run').select(['attempt']).where('session_id', '=', sessionId).orderBy('attempt', 'desc').executeTakeFirst();
       const run: Run = {
         id: `run_${randomUUID()}` as Run['id'],
@@ -36,6 +54,14 @@ export class RunsService {
         checkpoint_id: run.checkpointId ?? null, error_code: null, version: 1,
         created_at: new Date(run.createdAt),
       }).execute();
+      if (config && plan) {
+        await trx.insertInto('execution_job').values({
+          id: `job_${randomUUID()}`, run_id: run.id, daemon_id: config.daemonId,
+          plan_hash: plan.checksum, plan_snapshot: JSON.stringify(plan), config: JSON.stringify(config),
+          goal: session.goal ?? '',
+        }).execute();
+        await trx.updateTable('session').set({ status: 'queued', version: session.version + 1 }).where('id', '=', sessionId).execute();
+      }
       const project = await trx.selectFrom('task').select(['project_id']).where('id', '=', session.task_id).executeTakeFirstOrThrow();
       await this.events.append(trx, {
         eventType: 'run.created', projectId: project.project_id, taskId: session.task_id,
@@ -56,8 +82,25 @@ export class RunsService {
     };
   }
 
+  async cancel(runId: string): Promise<Run> {
+    await this.database.db.transaction().execute(async trx => {
+      const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).forUpdate().executeTakeFirst();
+      const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
+      if (!run) throw new DomainError('RESOURCE_NOT_FOUND', 'run was not found');
+      if (['completed', 'failed', 'cancelled'].includes(run.status)) return;
+      if (job) await trx.updateTable('execution_job').set({ cancel_requested: true, status: 'cancelled' }).where('id', '=', job.id).execute();
+      await trx.updateTable('run').set({ status: 'cancelled', version: run.version + 1 }).where('id', '=', runId).execute();
+      await trx.updateTable('session').set(eb => ({ status: 'cancelled', version: eb('version', '+', 1) })).where('id', '=', run.session_id).execute();
+      const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id').select(['task.project_id', 'task.id as task_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
+      await this.events.append(trx, { eventType: 'run.cancelled', projectId: context.project_id, taskId: context.task_id, sessionId: run.session_id, runId, actor: { type: 'user', id: 'local-user' }, payload: { status: 'cancelled' } });
+    });
+    return this.get(runId);
+  }
+
   async fail(runId: string, errorCode: string): Promise<void> {
     await this.database.db.transaction().execute(async trx => {
+      const job = await trx.selectFrom('execution_job').select('id').where('run_id', '=', runId).executeTakeFirst();
+      if (job) throw new DomainError('PERMISSION_DENIED', 'execution runs require authenticated daemon progress');
       const row = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
       if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} was not found`);
       if (row.status !== 'queued' && row.status !== 'running') {
@@ -77,6 +120,8 @@ export class RunsService {
 
   async complete(runId: string): Promise<void> {
     await this.database.db.transaction().execute(async trx => {
+      const job = await trx.selectFrom('execution_job').select('id').where('run_id', '=', runId).executeTakeFirst();
+      if (job) throw new DomainError('PERMISSION_DENIED', 'execution runs require authenticated daemon progress');
       const row = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
       if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} was not found`);
       if (row.status !== 'queued' && row.status !== 'running') {

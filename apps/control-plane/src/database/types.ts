@@ -1,3 +1,5 @@
+import type { Generated } from 'kysely';
+
 export type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
 export interface OrganizationTable {
@@ -35,6 +37,8 @@ export interface SessionTable {
   entry_agent: string;
   status: string;
   plan_hash: string | null;
+  execution_config: Generated<JsonValue>;
+  goal: Generated<string | null>;
   version: number;
   created_at: Date;
 }
@@ -112,6 +116,39 @@ export interface DaemonTable {
   status: string;
   last_heartbeat_at: Date;
   created_at: Date;
+  auth_token_hash: Generated<string | null>;
+}
+
+export interface ExecutionJobTable {
+  id: string;
+  run_id: string;
+  daemon_id: string;
+  plan_hash: string;
+  plan_snapshot: JsonValue;
+  config: JsonValue;
+  goal: string;
+  status: Generated<string>;
+  cancel_requested: Generated<boolean>;
+  claim_token_hash: Generated<string | null>;
+  lease_expires_at: Generated<Date | null>;
+  last_sequence: Generated<number>;
+  created_at: Generated<Date>;
+}
+
+export interface CheckpointTable {
+  id: string;
+  run_id: string;
+  sequence: number;
+  snapshot: JsonValue;
+  created_at: Generated<Date>;
+}
+
+export interface ExecutionProgressTable {
+  event_id: string;
+  job_id: string;
+  sequence: number;
+  request_hash: string;
+  created_at: Generated<Date>;
 }
 
 export interface DaemonOutboxEventTable {
@@ -138,4 +175,7 @@ export interface Database {
   artifact: ArtifactTable;
   daemon: DaemonTable;
   daemon_outbox_event: DaemonOutboxEventTable;
+  execution_job: ExecutionJobTable;
+  execution_progress: ExecutionProgressTable;
+  checkpoint: CheckpointTable;
 }

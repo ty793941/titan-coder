@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
-import { DomainError } from '@titan/contracts';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { daemonEventSchema, daemonRegistrationSchema, DomainError } from '@titan/contracts';
 import type { DaemonRegistration } from '@titan/daemon-protocol';
 import { DatabaseService } from '../../database/database.service.js';
+import { daemonStatus, sameToken, tokenHash } from './execution-policy.js';
 
 type DaemonInput = Omit<DaemonRegistration, 'environmentType'> & { environmentType: 'local' | 'cloud' };
 type DaemonView = {
@@ -21,8 +22,10 @@ type DaemonView = {
 export class DaemonsService {
   constructor(@Inject(DatabaseService) private readonly database: DatabaseService) {}
 
-  async register(input: DaemonInput): Promise<DaemonView> {
+  async register(source: DaemonInput): Promise<DaemonView & { authToken: string }> {
+    const input = daemonRegistrationSchema.parse(source);
     const daemonId = `daemon_${randomUUID()}`;
+    const authToken = randomBytes(32).toString('hex');
     const now = new Date();
     await this.database.db.insertInto('daemon').values({
       id: daemonId,
@@ -35,9 +38,11 @@ export class DaemonsService {
       status: 'ready',
       last_heartbeat_at: now,
       created_at: now,
+      auth_token_hash: tokenHash(authToken),
     }).execute();
     return {
       daemonId,
+      authToken,
       machineName: input.machineName,
       environmentType: input.environmentType,
       capabilities: input.capabilities,
@@ -47,6 +52,13 @@ export class DaemonsService {
       status: 'ready',
       lastHeartbeatAt: now.toISOString(),
     };
+  }
+
+  async authenticate(daemonId: string, authorization?: string): Promise<void> {
+    const match = /^Bearer ([a-f0-9]{64})$/.exec(authorization ?? '');
+    const row = await this.database.db.selectFrom('daemon').select(['auth_token_hash', 'status']).where('id', '=', daemonId).executeTakeFirst();
+    if (!match || !row || !sameToken(match[1]!, row.auth_token_hash)) throw new UnauthorizedException('invalid daemon credentials');
+    if (row.status === 'revoked') throw new DomainError('PERMISSION_DENIED', 'daemon is revoked');
   }
 
   async get(daemonId: string): Promise<DaemonView> {
@@ -59,7 +71,8 @@ export class DaemonsService {
     const existing = await this.get(daemonId);
     if (existing.status === 'revoked') throw new DomainError('PERMISSION_DENIED', `daemon ${daemonId} is revoked`);
     const now = new Date();
-    await this.database.db.updateTable('daemon').set({ status: 'ready', last_heartbeat_at: now }).where('id', '=', daemonId).execute();
+    const updated = await this.database.db.updateTable('daemon').set({ status: 'ready', last_heartbeat_at: now }).where('id', '=', daemonId).where('status', '!=', 'revoked').executeTakeFirst();
+    if (Number(updated.numUpdatedRows) === 0) throw new DomainError('PERMISSION_DENIED', 'daemon is revoked');
     return { ...existing, status: 'ready', lastHeartbeatAt: now.toISOString() };
   }
 
@@ -68,7 +81,9 @@ export class DaemonsService {
     await this.database.db.updateTable('daemon').set({ status: 'revoked' }).where('id', '=', daemonId).execute();
   }
 
-  async appendEvent(daemonId: string, input: { eventId: string; sequence: number; eventType: string; payload: Record<string, unknown> }): Promise<{ created: boolean }> {
+  async appendEvent(daemonId: string, source: { eventId: string; sequence: number; eventType: string; payload: Record<string, unknown> }): Promise<{ created: boolean }> {
+    const input = daemonEventSchema.parse(source);
+    if (input.daemonId && input.daemonId !== daemonId) throw new DomainError('PERMISSION_DENIED', 'event daemonId does not match the authenticated daemon');
     const daemon = await this.get(daemonId);
     if (daemon.status === 'revoked') throw new DomainError('PERMISSION_DENIED', `daemon ${daemonId} is revoked`);
     const result = await this.database.db.insertInto('daemon_outbox_event').values({
@@ -111,7 +126,7 @@ export class DaemonsService {
       workspaceRoots: row.workspace_roots as string[],
       maxConcurrentSessions: row.max_concurrent_sessions,
       daemonVersion: row.daemon_version,
-      status: row.status,
+      status: daemonStatus(row),
       lastHeartbeatAt: row.last_heartbeat_at.toISOString(),
     };
   }

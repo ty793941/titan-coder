@@ -5,9 +5,6 @@ import { DomainError } from '@titan/contracts';
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
-    if (process.env.CONTROL_PLANE_LOG === 'debug') {
-      console.error(exception);
-    }
     const response = host.switchToHttp().getResponse<{ status: (code: number) => { send: (body: unknown) => void } }>();
     const request = host.switchToHttp().getRequest<{ headers?: Record<string, string | undefined> }>();
     const traceId = request.headers?.['x-trace-id'] ?? `trace_${Date.now()}`;
@@ -20,7 +17,7 @@ export class HttpErrorFilter implements ExceptionFilter {
       return;
     }
     if (exception instanceof HttpException) {
-      response.status(exception.getStatus()).send({ code: 'VALIDATION_FAILED', message: exception.message, details: {}, traceId, retryable: false, occurredAt: new Date().toISOString() });
+      response.status(exception.getStatus()).send({ code: exception.getStatus() === 401 ? 'PERMISSION_DENIED' : 'VALIDATION_FAILED', message: exception.message, details: {}, traceId, retryable: false, occurredAt: new Date().toISOString() });
       return;
     }
     response.status(500).send({ code: 'INTERNAL_ERROR', message: 'internal server error', details: {}, traceId, retryable: false, occurredAt: new Date().toISOString() });

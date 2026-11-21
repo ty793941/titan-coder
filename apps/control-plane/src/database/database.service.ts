@@ -7,7 +7,7 @@ import type { Database } from './types.js';
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
-  private static schemaPromise: Promise<void> | undefined;
+  private schemaPromise: Promise<void> | undefined;
   readonly db: Kysely<Database>;
   private initialized = false;
 
@@ -25,13 +25,13 @@ export class DatabaseService implements OnModuleDestroy {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    if (!DatabaseService.schemaPromise) {
-      DatabaseService.schemaPromise = this.runInitializationScripts().catch(error => {
-        DatabaseService.schemaPromise = undefined;
+    if (!this.schemaPromise) {
+      this.schemaPromise = this.runInitializationScripts().catch(error => {
+        this.schemaPromise = undefined;
         throw error;
       });
     }
-    await DatabaseService.schemaPromise;
+    await this.schemaPromise;
     this.initialized = true;
   }
 

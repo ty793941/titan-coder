@@ -30,4 +30,10 @@ export class RunsController {
   async complete(@Param('runId') runId: string) {
     await this.runs.complete(runId);
   }
+
+  @Post('/runs/:runId/cancel')
+  @HttpCode(200)
+  cancel(@Param('runId') runId: string) {
+    return this.runs.cancel(runId);
+  }
 }

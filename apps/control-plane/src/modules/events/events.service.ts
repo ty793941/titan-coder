@@ -7,6 +7,7 @@ import type { Database, EventTable, JsonValue } from '../../database/types.js';
 import { DatabaseService } from '../../database/database.service.js';
 
 type EventInput = {
+  eventId?: string;
   eventType: string;
   projectId: string;
   taskId?: string;
@@ -30,7 +31,11 @@ export class EventsService {
       .executeTakeFirst();
     const sequence = Number(last?.max_sequence ?? 0) + 1;
     if (!Number.isSafeInteger(sequence)) throw new DomainError('EVENT_SEQUENCE_GAP', 'event sequence exceeds the supported range');
-    const eventId = `evt_${randomUUID()}`;
+    const eventId = input.eventId ?? `evt_${randomUUID()}`;
+    if (input.eventId) {
+      const existing = await trx.selectFrom('event').select('event_id').where('event_id', '=', eventId).executeTakeFirst();
+      if (existing) throw new DomainError('IDEMPOTENCY_CONFLICT', 'eventId already exists in the event stream');
+    }
     const row: EventTable = {
       event_id: eventId,
       event_type: input.eventType,

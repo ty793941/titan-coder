@@ -74,11 +74,11 @@ export class ArtifactsService {
   }
 
   async hasApprovedPlan(taskId: string, checksum: string): Promise<boolean> {
-    const row = await this.database.db.selectFrom('artifact').select('artifact_id')
+    const row = await this.database.db.selectFrom('artifact').select('checksum')
       .where('task_id', '=', taskId).where('type', '=', 'plan')
-      .where('checksum', '=', checksum).where('status', '=', 'approved')
-      .where('review_state', '=', 'approved').executeTakeFirst();
-    return Boolean(row);
+      .where('status', '=', 'approved')
+      .where('review_state', '=', 'approved').orderBy('version', 'desc').executeTakeFirst();
+    return row?.checksum === checksum;
   }
 
   private toArtifact(row: {
