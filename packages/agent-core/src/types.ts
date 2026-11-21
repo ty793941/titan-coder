@@ -15,6 +15,8 @@ export type PermissionRequest = {
   approvalToken?: string;
 };
 
+export type ApprovalTokenValidator = (token: string, request: PermissionRequest) => boolean | Promise<boolean>;
+
 export type HookPhase = 'before' | 'after';
 export type HookDecision = 'allow' | 'deny';
 
@@ -38,6 +40,8 @@ export type Hook = {
 export type ToolContext = {
   runId: string;
   approvalToken?: string;
+  allowedTools?: string[];
+  workspacePath?: string;
 };
 
 export type ToolManifest = {
@@ -57,9 +61,40 @@ export type ToolRequest = {
 export type ToolResult = {
   toolUseId: string;
   name: string;
+  inputHash: string;
   output: unknown;
   replayed: boolean;
+  uncertain?: boolean;
 };
 
 export type GoalEvidence = { kind: string; reference: string };
 export type GoalDecision = 'satisfied' | 'continue' | 'defer' | 'impossible' | 'error';
+
+export type CheckpointMessage = { role: 'user' | 'assistant' | 'tool'; text: string };
+export type SuccessfulTool = { id: string; name: string; inputHash: string; output: unknown };
+export type ExecutionCheckpoint = {
+  id: string;
+  messages: CheckpointMessage[];
+  successfulTools: SuccessfulTool[];
+  evidence: GoalEvidence[];
+};
+
+export type AgentProgress = {
+  type: 'output' | 'tool' | 'checkpoint';
+  payload: Record<string, unknown>;
+  checkpoint?: ExecutionCheckpoint;
+};
+
+export type AgentRunInput = {
+  runId: string;
+  goal: string;
+  runtime?: 'codex' | 'qwen';
+  credentialRef?: string;
+  modelRef?: string;
+  workspacePath?: string;
+  allowedTools?: string[];
+  timeoutMs?: number;
+  maxTurns?: number;
+  signal?: AbortSignal;
+  checkpoint?: ExecutionCheckpoint;
+};

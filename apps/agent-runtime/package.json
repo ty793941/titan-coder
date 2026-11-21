@@ -10,6 +10,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@titan/agent-core": "workspace:*"
+    "@titan/agent-core": "workspace:*",
+    "@titan/contracts": "workspace:*",
+    "@titan/daemon-protocol": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30"
   }
 }

@@ -5,6 +5,6 @@
     "outDir": "dist",
     "composite": true
   },
-  "references": [{ "path": "../../packages/agent-core" }],
+  "references": [{ "path": "../../packages/agent-core" }, { "path": "../../packages/daemon-protocol" }],
   "include": ["src/**/*.ts"]
 }

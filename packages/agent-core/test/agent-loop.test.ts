@@ -18,7 +18,7 @@ describe('AgentLoop', () => {
     });
 
     const result = await loop.run({ runId: 'run_1', goal: '生成带证据的结果' });
-    expect(result.status).toBe('continue');
+    expect(result.status).toBe('waiting_input');
   });
 
   it('resumes from the latest successful checkpoint without repeating a tool', async () => {

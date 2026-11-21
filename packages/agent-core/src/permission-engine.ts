@@ -1,8 +1,8 @@
 import { DomainError } from '@titan/contracts';
-import type { PermissionDecision, PermissionRequest, PermissionRule } from './types.js';
+import type { ApprovalTokenValidator, PermissionDecision, PermissionRequest, PermissionRule } from './types.js';
 
 export class PermissionEngine {
-  constructor(private readonly rules: PermissionRule[]) {}
+  constructor(private readonly rules: PermissionRule[], private readonly validateApproval?: ApprovalTokenValidator) {}
 
   decide(request: PermissionRequest): { decision: PermissionDecision; source?: string; reason: string } {
     const matches = this.rules.filter(rule => this.matches(rule, request));
@@ -15,11 +15,13 @@ export class PermissionEngine {
     return { decision: 'deny', reason: 'no policy matched; default deny' };
   }
 
-  requireExecution(request: PermissionRequest): void {
+  async requireExecution(request: PermissionRequest): Promise<void> {
     const result = this.decide(request);
     if (result.decision === 'deny') throw new DomainError('PERMISSION_DENIED', result.reason, { source: result.source });
-    if (result.decision === 'ask' && !request.approvalToken) {
-      throw new DomainError('APPROVAL_REQUIRED', result.reason, { source: result.source });
+    if (result.decision === 'ask') {
+      if (!request.approvalToken) throw new DomainError('APPROVAL_REQUIRED', result.reason, { source: result.source });
+      const valid = this.validateApproval ? await this.validateApproval(request.approvalToken, request) : false;
+      if (!valid) throw new DomainError('PERMISSION_DENIED', 'approval token is not authorized', { source: result.source });
     }
   }
 
