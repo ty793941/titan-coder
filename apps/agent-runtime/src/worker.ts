@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AgentLoop, FileCheckpointStore, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
 import type { RuntimeAdapter, RuntimeSessionConfig } from '@titan/agent-core';
 import { createCodexApiKeyAdapter, createQwenOfficialAdapter } from '@titan/agent-core';
@@ -118,4 +119,4 @@ export function installWorkerProcess(): void {
   });
 }
 
-if (process.env.TITAN_RUNTIME_WORKER === '1') installWorkerProcess();
+if (process.env.TITAN_RUNTIME_WORKER === '1' || (typeof process.send === 'function' && process.argv[1] === fileURLToPath(import.meta.url))) installWorkerProcess();

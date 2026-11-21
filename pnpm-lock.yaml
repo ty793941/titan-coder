@@ -23,6 +23,19 @@ importers:
       '@titan/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@titan/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@titan/daemon-protocol':
+        specifier: workspace:*
+        version: link:../../packages/daemon-protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.30
+        version: 22.20.5
 
   apps/cli:
     devDependencies:

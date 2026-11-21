@@ -105,7 +105,7 @@ export class ExecutionService {
         ...(input.type === 'failed' ? { error_code: typeof input.payload.errorCode === 'string' ? input.payload.errorCode : 'TOOL_EXECUTION_FAILED' } : {}),
       }).where('id', '=', runId).execute();
       await trx.updateTable('session').set(eb => ({ status, version: eb('version', '+', 1) })).where('id', '=', run.session_id).execute();
-      await trx.updateTable('execution_job').set({ status: terminal.has(status) ? status : 'claimed', last_sequence: input.sequence,
+      await trx.updateTable('execution_job').set({ status: terminal.has(status) || status === 'waiting_input' ? status : 'claimed', last_sequence: input.sequence,
         lease_expires_at: new Date(Date.now() + leaseMs), ...(status === 'cancelled' ? { cancel_requested: true } : {}),
       }).where('id', '=', job.id).execute();
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id').select(['task.project_id', 'task.id as task_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();

@@ -127,7 +127,7 @@ export class DaemonRunner {
             if (pending.daemonId !== device.daemonId) throw new Error('OUTBOX_DEVICE_MISMATCH');
             const ack = await this.client.progress(device, pending.runId, pending.progress, signal);
             if (ack.cancelRequested && this.active?.dispatch.runId === pending.runId) this.active.cancel();
-            if (!ack.accepted) throw new Error('PROGRESS_NOT_ACCEPTED');
+            // accepted=false 表示控制面已去重或终态已固定，HTTP 成功即可确认本地重放。
             await outbox.acknowledge(pending.progress.eventId);
           }
           if (!this.active && !outbox.pending().length) {
