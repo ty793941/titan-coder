@@ -1,7 +1,7 @@
 import type { ExecutionCheckpoint, RunProgress } from '@titan/daemon-protocol';
 
 const types = new Set(['running', 'output', 'checkpoint', 'completed', 'failed', 'cancelled', 'waiting_input']);
-const payloadFields = new Set(['text', 'code', 'message', 'reason', 'status', 'turn', 'toolCallId', 'toolName', 'reference', 'evidence', 'usage', 'output', 'result', 'error', 'checkpointId', 'exitCode', 'signal', 'source', 'pid']);
+const payloadFields = new Set(['text', 'code', 'message', 'reason', 'status', 'turn', 'toolCallId', 'toolName', 'hookName', 'inputHash', 'phase', 'reference', 'evidence', 'usage', 'output', 'result', 'error', 'checkpointId', 'exitCode', 'signal', 'source', 'pid']);
 const sensitiveField = /(?:api.?key|secret|password|authorization|token|credential|environment|^env$)/i;
 
 export function sanitizeProgress(input: RunProgress, secrets: readonly string[] = []): RunProgress {

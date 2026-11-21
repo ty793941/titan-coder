@@ -68,6 +68,10 @@ export const progressOutputSchema = z.object({
   status: boundedText.max(100),
   toolName: identifier,
   toolCallId: identifier,
+  hookName: identifier.optional(),
+  inputHash: identifier.optional(),
+  reason: z.string().max(32768).optional(),
+  phase: z.enum(['before', 'after']).optional(),
   output: z.unknown(),
 }).strict();
 

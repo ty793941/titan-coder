@@ -276,9 +276,11 @@ export class ExecutionService {
       const existing = await trx.selectFrom('tool_call').selectAll().where('run_id', '=', runId).where('tool_use_id', '=', output.toolCallId).executeTakeFirst();
       if (!existing) {
         await trx.insertInto('tool_call').values({ id: `tool_call_${randomUUID()}`, run_id: runId, tool_use_id: output.toolCallId, tool_name: output.toolName, status: output.status, result: safeOutput, created_at: new Date() }).execute();
+      } else {
+        await trx.updateTable('tool_call').set({ status: output.status, ...(output.output !== undefined ? { result: safeOutput } : {}) }).where('id', '=', existing.id).execute();
       }
     } else {
-      await trx.insertInto('hook_execution').values({ id: `hook_${randomUUID()}`, run_id: runId, hook_name: output.toolName, status: output.status, duration_ms: 0, created_at: new Date() }).execute();
+      await trx.insertInto('hook_execution').values({ id: `hook_${randomUUID()}`, run_id: runId, hook_name: output.hookName ?? output.toolName, status: output.status, duration_ms: 0, created_at: new Date() }).execute();
     }
     await trx.insertInto('audit_log').values({
       id: `audit_${randomUUID()}`, actor_type: 'daemon', actor_id: daemonId, action: 'execution.progress.output',

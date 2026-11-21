@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -89,8 +89,18 @@ describe('control plane to daemon to runtime', () => {
       const job = await db.selectFrom('execution_job').selectAll().where('run_id', '=', run.id).executeTakeFirstOrThrow();
       expect(job.status).toBe(expected);
       if (mode !== 'missing-credential') {
-        expect(await readFile(join(root, '.titan/artifacts/acceptance.md'), 'utf8')).toContain('Local execution evidence');
+        const artifacts = await request(`/tasks/${task.id}/artifacts`);
+        const artifact = artifacts.find((value: { type: string }) => value.type === 'source-diff');
+        expect(artifact?.sessionId).toBe(session.id);
+        expect(artifact?.sourceArtifacts).toContain(plan.artifactId);
+        const content = await readFile(new URL(artifact.uri), 'utf8');
+        expect(content).toContain('Local execution evidence');
+        expect(artifact.checksum).toBe(`sha256:${createHash('sha256').update(content).digest('hex')}`);
         expect(await db.selectFrom('checkpoint').select('id').where('run_id', '=', run.id).executeTakeFirst()).toBeDefined();
+        const tool = await db.selectFrom('tool_call').selectAll().where('run_id', '=', run.id).where('tool_use_id', '=', 'write-evidence').executeTakeFirstOrThrow();
+        expect(tool.status).toBe('success');
+        const hooks = await db.selectFrom('hook_execution').select('hook_name').where('run_id', '=', run.id).execute();
+        expect(hooks.map(value => value.hook_name)).toContain('runtime-output-safety');
       }
       if (mode === 'lost-ack') expect(droppedAck).toBe(true);
       const response = await fetch(`${base}/api/runs/${run.id}/events`);
