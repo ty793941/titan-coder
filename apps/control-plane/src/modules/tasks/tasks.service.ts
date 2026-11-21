@@ -1,10 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { z } from 'zod';
 import { DomainError, taskCreateRequestSchema } from '@titan/contracts';
+import { transitionTask } from '@titan/domain';
 import type { Task } from '@titan/domain';
+import type { TaskTable } from '../../database/types.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
+import { requireApprovedStageChain } from './qrspi-gate.js';
+
+const stageRequestSchema = z.object({
+  stage: z.enum(['research', 'design', 'structure', 'plan', 'implement']),
+  expectedVersion: z.number().int().positive().max(2147483646),
+}).strict();
+
+const stageCommands = {
+  research: 'start-research', design: 'approve-research', structure: 'approve-design',
+  plan: 'approve-structure', implement: 'approve-plan',
+} as const;
 
 @Injectable()
 export class TasksService {
@@ -54,6 +68,35 @@ export class TasksService {
   async get(taskId: string): Promise<Task> {
     const row = await this.database.db.selectFrom('task').selectAll().where('id', '=', taskId).executeTakeFirst();
     if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `task ${taskId} was not found`);
+    return this.toTask(row);
+  }
+
+  async advanceStage(taskId: string, input: unknown): Promise<Task> {
+    const parsed = stageRequestSchema.parse(input);
+    return this.database.db.transaction().execute(async trx => {
+      const row = await trx.selectFrom('task').selectAll().where('id', '=', taskId).forUpdate().executeTakeFirst();
+      if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `task ${taskId} was not found`);
+      if (row.version !== parsed.expectedVersion) {
+        throw new DomainError('VERSION_CONFLICT', 'task version has changed', { expectedVersion: parsed.expectedVersion, actualVersion: row.version });
+      }
+      const nextStage = transitionTask(row.stage as Task['stage'], stageCommands[parsed.stage]);
+      if (row.status !== 'active' || nextStage !== parsed.stage) {
+        throw new DomainError('INVALID_STATE_TRANSITION', 'only an active task can advance to the next QRSPI stage');
+      }
+      const artifacts = await requireApprovedStageChain(trx, taskId, row.stage as Task['stage']);
+      const updated = await trx.updateTable('task').set({ stage: nextStage, version: row.version + 1 })
+        .where('id', '=', taskId).where('version', '=', parsed.expectedVersion).returningAll().executeTakeFirst();
+      if (!updated) throw new DomainError('VERSION_CONFLICT', 'task version has changed');
+      await this.events.append(trx, {
+        eventType: 'task.stage.changed', projectId: row.project_id, taskId,
+        actor: { type: 'user', id: 'local-user' },
+        payload: { fromStage: row.stage, toStage: nextStage, previousVersion: row.version, version: updated.version, artifacts },
+      });
+      return this.toTask(updated);
+    });
+  }
+
+  private toTask(row: TaskTable): Task {
     return {
       id: row.id as Task['id'], projectId: row.project_id as Task['projectId'], title: row.title,
       goal: row.goal, acceptanceCriteria: row.acceptance_criteria as string[], priority: row.priority as Task['priority'],

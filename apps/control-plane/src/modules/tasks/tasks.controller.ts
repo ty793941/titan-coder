@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post } from '@nestjs/common';
 import { EventsService } from '../events/events.service.js';
 import { TasksService } from './tasks.service.js';
 
@@ -26,5 +26,11 @@ export class TasksController {
   @Get('/tasks/:taskId/events')
   events(@Param('taskId') taskId: string) {
     return this.eventStore.listForTask(taskId);
+  }
+
+  @Post('/tasks/:taskId/stage')
+  @HttpCode(200)
+  advanceStage(@Param('taskId') taskId: string, @Body() body: unknown) {
+    return this.tasks.advanceStage(taskId, body);
   }
 }

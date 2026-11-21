@@ -8,7 +8,7 @@ export class ArtifactsController {
   @Post('/tasks/:taskId/artifacts')
   create(
     @Param('taskId') taskId: string,
-    @Body() body: { type: string; content: string; sourceArtifacts?: string[]; sessionId?: string },
+    @Body() body: unknown,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     return this.artifacts.create(taskId, body, idempotencyKey ?? `artifact-${Date.now()}`);
@@ -23,5 +23,10 @@ export class ArtifactsController {
   @HttpCode(200)
   approve(@Param('artifactId') artifactId: string) {
     return this.artifacts.approve(artifactId);
+  }
+
+  @Get('/artifacts/:artifactId')
+  get(@Param('artifactId') artifactId: string) {
+    return this.artifacts.get(artifactId);
   }
 }
