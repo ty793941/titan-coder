@@ -85,7 +85,7 @@ export class ArtifactsService {
     artifact_id: string; project_id: string; task_id: string; session_id: string | null;
     type: string; version: number; schema_version: number; uri: string; checksum: string;
     status: string; source_artifacts: unknown; created_by_type: string; created_by_id: string;
-    created_at: Date; review_state: string;
+    created_at: Date; review_state: string; reference: string | null; metadata: unknown;
   }): Artifact {
     const artifact = {
       artifactId: row.artifact_id as Artifact['artifactId'], projectId: row.project_id as Artifact['projectId'],
@@ -94,7 +94,8 @@ export class ArtifactsService {
       uri: row.uri, checksum: row.checksum as Artifact['checksum'], status: row.status as Artifact['status'],
       sourceArtifacts: row.source_artifacts as string[], createdBy: { type: row.created_by_type as Artifact['createdBy']['type'], id: row.created_by_id },
       createdAt: row.created_at.toISOString(), reviewState: row.review_state as Artifact['reviewState'],
+      ...(row.reference ? { reference: row.reference } : {}), metadata: row.metadata,
     };
-    return artifact as Artifact;
+    return artifact as unknown as Artifact;
   }
 }
