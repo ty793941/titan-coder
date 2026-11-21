@@ -1,15 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AgentLoop, containsSensitive, containsSensitivePath, containsUnsafePath, FileCheckpointStore, FileToolExecutionLedger, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
-import type { Hook, RuntimeAdapter, RuntimeSessionConfig } from '@titan/agent-core';
+import { AgentLoop, CheckpointStore, containsSensitive, containsSensitivePath, containsUnsafePath, FileCheckpointStore, FileToolExecutionLedger, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
+import type { ExecutionCheckpoint, Hook, RuntimeAdapter, RuntimeSessionConfig } from '@titan/agent-core';
+import type { Checkpoint } from '@titan/agent-core';
 import { createCodexApiKeyAdapter, createQwenOfficialAdapter } from '@titan/agent-core';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
 import type { AgentRunResult } from '@titan/agent-core';
 import { resolveCredential } from './credentials.js';
+import { loadSkillContext, persistSkillContextSnapshot, sanitizeSkillSecrets } from './skills.js';
 import { createRuntimeTools, runtimeToolSpecs } from './tools.js';
 
 type WorkerMessage = { dispatch?: RunDispatch; type?: 'cancel' | 'checkpoint'; checkpoint?: RunDispatch['checkpoint'] };
+type RuntimeConfigWithLocalPolicy = RunDispatch['config'] & {
+  localPolicy?: { trustedCode?: boolean; enabledSkills?: unknown };
+  enabledSkills?: unknown;
+};
 export type WorkerDependencies = {
   adapterFactory?: (config: RuntimeSessionConfig, credential: string) => RuntimeAdapter;
   credentialResolver?: (credentialRef: string) => Promise<string | undefined>;
@@ -22,10 +28,7 @@ const payloadKeys = new Set(['source', 'text', 'code', 'message', 'status', 'tur
 
 function safePayload(payload: Record<string, unknown>, secretValues: string[]): Record<string, unknown> {
   const safe = Object.fromEntries(Object.entries(payload).filter(([key]) => payloadKeys.has(key)));
-  for (const secret of secretValues.filter(Boolean)) {
-    for (const [key, value] of Object.entries(safe)) if (typeof value === 'string') safe[key] = value.split(secret).join('[REDACTED]');
-  }
-  return safe;
+  return sanitizeSkillSecrets(safe, secretValues);
 }
 
 function runtimeSafetyHooks(): Hook[] {
@@ -42,6 +45,63 @@ function runtimeSafetyHooks(): Hook[] {
       return 'allow';
     },
   }];
+}
+
+function contextMarker(contextReference: string | undefined): string {
+  return `[trusted context snapshot${contextReference ? `: ${contextReference}` : ''}]`;
+}
+
+function projectContextValue(value: unknown, contextSources: readonly string[], contextReferences: readonly string[], contextReference: string | undefined): unknown {
+  if (typeof value === 'string') {
+    if (/^\s*[\[{]/.test(value) && /"reference"\s*:\s*"workspace:\/\/(?:AGENTS\.md|\.titan\/skills\/)/.test(value)) {
+      try {
+        return JSON.stringify(projectContextValue(JSON.parse(value), contextSources, contextReferences, contextReference));
+      } catch {
+        return value;
+      }
+    }
+    const blockStart = value.indexOf('<trusted-project-context>');
+    const blockEnd = value.indexOf('</trusted-project-context>', blockStart);
+    const projectedBlock = blockStart >= 0 && blockEnd >= 0 ? `${value.slice(0, blockStart)}${contextMarker(contextReference)}${value.slice(blockEnd + '</trusted-project-context>'.length)}` : value;
+    return contextSources.filter(Boolean).reduce((text, source) => text.split(source).join(contextMarker(contextReference)), projectedBlock);
+  }
+  if (Array.isArray(value)) return value.map(item => projectContextValue(item, contextSources, contextReferences, contextReference));
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const reference = typeof record.reference === 'string' ? record.reference : undefined;
+    const projected = Object.fromEntries(Object.entries(record).map(([key, child]) => [key, projectContextValue(child, contextSources, contextReferences, contextReference)]));
+    if (reference && (contextReferences.includes(reference) || reference === 'workspace://AGENTS.md' || reference.startsWith('workspace://.titan/skills/')) && typeof record.text === 'string') projected.text = contextMarker(contextReference);
+    return projected;
+  }
+  return value;
+}
+
+function projectCheckpoint(checkpoint: Checkpoint | ExecutionCheckpoint, contextSources: readonly string[], contextReferences: readonly string[], contextReference: string | undefined, secretValues: string[]): ExecutionCheckpoint {
+  return sanitizeSkillSecrets(projectContextValue(checkpoint, contextSources, contextReferences, contextReference), secretValues) as ExecutionCheckpoint;
+}
+
+class RedactingCheckpointStore extends CheckpointStore {
+  constructor(
+    private readonly delegate: FileCheckpointStore,
+    private readonly contextSources: readonly string[],
+    private readonly contextReferences: readonly string[],
+    private readonly contextReference: string | undefined,
+    private readonly secrets: string[],
+  ) {
+    super(secrets);
+  }
+
+  override async save(checkpoint: Checkpoint): Promise<ExecutionCheckpoint> {
+    return this.delegate.save(projectCheckpoint(checkpoint, this.contextSources, this.contextReferences, this.contextReference, this.secrets));
+  }
+
+  override async get(id: string): Promise<ExecutionCheckpoint> {
+    return this.delegate.get(id);
+  }
+
+  override async hydrate(checkpoint: ExecutionCheckpoint): Promise<ExecutionCheckpoint> {
+    return this.delegate.hydrate(projectCheckpoint(checkpoint, this.contextSources, this.contextReferences, this.contextReference, this.secrets));
+  }
 }
 
 function adapterFor(config: RuntimeSessionConfig, credential: string): RuntimeAdapter {
@@ -76,6 +136,28 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     emit('waiting_input', { status: 'waiting_input', message: 'provider credential is unavailable' });
     return result;
   }
+  const runtimeConfig = dispatch.config as RuntimeConfigWithLocalPolicy;
+  const configuredSkills = runtimeConfig.localPolicy?.enabledSkills ?? runtimeConfig.enabledSkills ?? [];
+  if (!Array.isArray(configuredSkills) || configuredSkills.some(skill => typeof skill !== 'string')) {
+    const result: AgentRunResult = { status: 'failed', replayedToolUseIds: [], evidence: [], error: 'skill activation list is invalid' };
+    emit('failed', { status: 'failed', message: result.error });
+    return result;
+  }
+  let contextSnapshot: Awaited<ReturnType<typeof loadSkillContext>>;
+  let contextReference: string | undefined;
+  try {
+    contextSnapshot = await loadSkillContext({ workspacePath: dispatch.config.workspacePath, allowedTools: dispatch.config.allowedTools, enabledSkillIds: configuredSkills, secretValues });
+    if (contextSnapshot) contextReference = await persistSkillContextSnapshot(dispatch.config.workspacePath, contextSnapshot, secretValues);
+  } catch (error) {
+    const result: AgentRunResult = { status: 'failed', replayedToolUseIds: [], evidence: [], error: error instanceof Error ? error.message : String(error) };
+    emit('failed', { status: 'failed', message: result.error });
+    return result;
+  }
+  if (contextSnapshot) {
+    const skillSummary = contextSnapshot.skills.map(skill => `${skill.id}@${skill.version}(${skill.digest})`).join(', ');
+    emit('output', { reference: contextReference, text: `已载入项目上下文${skillSummary ? `：${skillSummary}` : ''}` });
+  }
+  const goal = contextSnapshot ? `${dispatch.goal}\n\n${contextSnapshot.text}` : dispatch.goal;
   const adapterConfig: RuntimeSessionConfig = {
     runtime: dispatch.config.runtime,
     credentialRef: dispatch.config.credentialRef,
@@ -95,7 +177,10 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
   const ledgerRoot = join(dispatch.config.workspacePath, '.titan', 'tool-ledger');
   const tools = new ToolRegistry({ permission: permissions, hooks, ledger: new FileToolExecutionLedger(ledgerRoot, dispatch.config.workspacePath), onAudit: emitAudit });
   for (const tool of createRuntimeTools()) tools.register(tool);
-  const checkpoints = new FileCheckpointStore(dependencies.checkpointRoot ?? join(dispatch.config.workspacePath, '.titan', 'checkpoints'), dispatch.config.workspacePath, secretValues);
+  const checkpointStore = new FileCheckpointStore(dependencies.checkpointRoot ?? join(dispatch.config.workspacePath, '.titan', 'checkpoints'), dispatch.config.workspacePath, secretValues);
+  const contextSources = contextSnapshot ? [contextSnapshot.text, ...contextSnapshot.sourceTexts] : [];
+  const contextReferences = contextSnapshot?.references ?? [];
+  const checkpoints = new RedactingCheckpointStore(checkpointStore, contextSources, contextReferences, contextReference, secretValues);
   const loop = new AgentLoop({
     adapter,
     tools,
@@ -103,14 +188,15 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     goalGate: new GoalGate(),
     toolSpecs: runtimeToolSpecs.filter(tool => dispatch.config.allowedTools.includes(tool.name)),
     onProgress: progress => {
-      if (progress.type === 'checkpoint') emit('checkpoint', { checkpointId: progress.checkpoint?.id, evidence: progress.checkpoint?.evidence ?? [] }, progress.checkpoint);
+      const publicCheckpoint = progress.checkpoint ? projectCheckpoint(progress.checkpoint, contextSources, contextReferences, contextReference, secretValues) : undefined;
+      if (progress.type === 'checkpoint') emit('checkpoint', { checkpointId: publicCheckpoint?.id, evidence: publicCheckpoint?.evidence ?? [] }, publicCheckpoint);
       else if (progress.type === 'tool') emit('output', { source: 'tool', status: 'requested', ...progress.payload });
       else emit('output', progress.payload);
     },
   });
   const result = await loop.run({
     runId: dispatch.runId,
-    goal: dispatch.goal,
+    goal,
     runtime: dispatch.config.runtime,
     credentialRef: dispatch.config.credentialRef,
     ...(dispatch.config.modelRef ? { modelRef: dispatch.config.modelRef } : {}),
@@ -121,13 +207,14 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     ...(dependencies.signal ? { signal: dependencies.signal } : {}),
     ...(dispatch.checkpoint ? { checkpoint: dispatch.checkpoint } : {}),
     secretValues,
-    trustedCode: (dispatch.config as RunDispatch['config'] & { localPolicy?: { trustedCode?: boolean } }).localPolicy?.trustedCode === true,
+    trustedCode: runtimeConfig.localPolicy?.trustedCode === true,
   });
   const checkpoint = result.checkpoint;
-  if (result.status === 'satisfied') emit('completed', { status: 'completed', evidence: result.evidence, ...(checkpoint ? { checkpointId: checkpoint.id } : {}) }, checkpoint);
-  else if (result.status === 'waiting_input') emit('waiting_input', { status: 'waiting_input', message: result.error ?? 'human input is required', evidence: result.evidence, ...(checkpoint ? { checkpointId: checkpoint.id } : {}) }, checkpoint);
-  else if (result.status === 'cancelled') emit('cancelled', { status: 'cancelled', message: result.error ?? 'run cancelled', evidence: result.evidence, ...(checkpoint ? { checkpointId: checkpoint.id } : {}) }, checkpoint);
-  else emit('failed', { status: 'failed', message: result.error ?? 'runtime failed', evidence: result.evidence, ...(checkpoint ? { checkpointId: checkpoint.id } : {}) }, checkpoint);
+  const publicCheckpoint = checkpoint ? projectCheckpoint(checkpoint, contextSources, contextReferences, contextReference, secretValues) : undefined;
+  if (result.status === 'satisfied') emit('completed', { status: 'completed', evidence: result.evidence, ...(publicCheckpoint ? { checkpointId: publicCheckpoint.id } : {}) }, publicCheckpoint);
+  else if (result.status === 'waiting_input') emit('waiting_input', { status: 'waiting_input', message: result.error ?? 'human input is required', evidence: result.evidence, ...(publicCheckpoint ? { checkpointId: publicCheckpoint.id } : {}) }, publicCheckpoint);
+  else if (result.status === 'cancelled') emit('cancelled', { status: 'cancelled', message: result.error ?? 'run cancelled', evidence: result.evidence, ...(publicCheckpoint ? { checkpointId: publicCheckpoint.id } : {}) }, publicCheckpoint);
+  else emit('failed', { status: 'failed', message: result.error ?? 'runtime failed', evidence: result.evidence, ...(publicCheckpoint ? { checkpointId: publicCheckpoint.id } : {}) }, publicCheckpoint);
   return result;
 }
 
