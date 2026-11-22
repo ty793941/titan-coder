@@ -79,7 +79,7 @@ onBeforeUnmount(() => {
             : '在本机输入你的 API Key'
         "
         required
-        maxlength="8192"
+        maxlength="4096"
         :aria-describedby="`key-help-${provider}`"
       />
       <p :id="`key-help-${provider}`" class="field-help">

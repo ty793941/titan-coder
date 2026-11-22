@@ -106,7 +106,7 @@ class RedactingCheckpointStore extends CheckpointStore {
 
 function adapterFor(config: RuntimeSessionConfig, credential: string): RuntimeAdapter {
   if (config.runtime === 'qwen') return createQwenOfficialAdapter({ apiKey: credential });
-  return createCodexApiKeyAdapter({ apiKey: credential });
+  return createCodexApiKeyAdapter({ apiKey: credential, ...(process.env.TITAN_CODEX_BINARY ? { executable: process.env.TITAN_CODEX_BINARY } : {}) });
 }
 
 export async function executeDispatch(dispatch: RunDispatch, dependencies: WorkerDependencies = {}): Promise<AgentRunResult> {

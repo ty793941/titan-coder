@@ -63,6 +63,19 @@ const local: LocalStatus = {
   ],
 };
 describe("controlled execution form", () => {
+  it("starts a session returned by the redacted console API", async () => {
+    const run = vi.spyOn(api, "createRun").mockResolvedValue({ id: "run-1", sessionId: "session-1", attempt: 1, status: "queued", createdAt: "2026-11-22T12:00:00Z" });
+    const wrapper = mount(RunWorkspace, { props: { task, artifacts, local, state: { ...state, sessions: [{
+      id: "session-1", taskId: task.id, status: "queued", planHash: "sha256:plan", createdAt: "2026-11-22T12:00:00Z",
+      execution: { daemonId: "daemon-1", runtime: "qwen", workspacePath: "/workspace", allowedTools: ["artifact.write"], maxTurns: 6, timeoutMs: 120000 },
+    }] } } });
+    const button = wrapper.findAll("button").find(item => item.text().includes("开始真实运行"));
+    expect(button).toBeDefined();
+    expect(button?.attributes("disabled")).toBeUndefined();
+    await button?.trigger("click"); await flushPromises();
+    expect(run).toHaveBeenCalledWith("session-1");
+    wrapper.unmount();
+  });
   it("creates a session with a credential reference but waits for an explicit run action", async () => {
     const create = vi
       .spyOn(api, "createSession")

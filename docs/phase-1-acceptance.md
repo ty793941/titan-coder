@@ -6,7 +6,7 @@
 
 ## 1. 验收对象
 
-本阶段没有 Web UI。通过 REST API、CLI、SSE、磁盘文件和数据库记录验收，不把手动标记 Run 完成视作真实模型执行证据。
+原 Headless 验收仍可通过 REST API、CLI、SSE、磁盘文件和数据库记录进行。根据用户追加需求，现提供本机 UI：运行 `pnpm ui` 后打开 `http://127.0.0.1:5173`，在“环境与 Key”添加凭证，详见 [UI 验收说明](ui-acceptance.md)。不把手动标记 Run 完成视作真实模型执行证据。
 
 ```text
 Project → Task → 准备工件与批准 → Session(execution)

@@ -4,7 +4,17 @@ Titan Coder 是一个面向产品和研发交付的 Agent 工作台。第一阶�
 
 ## 当前阶段
 
-Phase 1 已提供本机 Daemon 自动认领 Run、独立 Node Worker、持久进度 Outbox、Checkpoint 恢复、QRSPI 审批门禁和实时 SSE。Codex 使用 App Server stdio 原生协议，Qwen 使用官方兼容 API；真实模型推理尚待配置凭证后验收。Web UI、云端 Session、多人协作、外部系统与其他 Provider 留到后续阶段。
+Phase 1 已提供本机 Daemon 自动认领 Run、独立 Node Worker、持久进度 Outbox、Checkpoint 恢复、QRSPI 审批门禁和实时 SSE。Codex 使用 App Server stdio 原生协议，Qwen 使用官方兼容 API；真实模型推理尚待配置凭证后验收。根据人工验收需求，另提供本机 Vue 工作台；云端 Session、多人协作、外部系统与其他 Provider 留到后续阶段。
+
+## 浏览器人工验收
+
+```bash
+pnpm install
+docker compose -f infra/docker-compose.yml up -d --wait postgres
+pnpm ui
+```
+
+打开 `http://127.0.0.1:5173`。在“环境与 Key”添加 Qwen 与 OpenAI 官方 Key，保存到 macOS 钥匙串，再启动本机 Daemon。项目、任务、工件批准、Run 与事件均可在界面操作；模型只在你显式启动运行后调用。详见 [UI 验收与 Key 配置](docs/ui-acceptance.md)。
 
 ## 本地开发
 

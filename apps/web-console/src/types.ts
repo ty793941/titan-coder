@@ -30,7 +30,7 @@ export interface Task {
 export interface Execution {
   daemonId: string;
   runtime: Provider;
-  credentialRef: string;
+  credentialRef?: string;
   modelRef?: string;
   workspacePath: string;
   allowedTools: string[];

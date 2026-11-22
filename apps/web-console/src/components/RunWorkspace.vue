@@ -104,6 +104,7 @@ const existingBlocker = computed(() => {
   )
     return "此 Session 的计划已过期，请创建新的 Session。";
   if (
+    selectedSession.value.execution.credentialRef &&
     selectedSession.value.execution.credentialRef !==
     selectedSessionCredential.value?.credentialRef
   )
