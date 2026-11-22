@@ -67,19 +67,19 @@ Worker 的进度消息必须是：
 { type: 'progress', progress: RunProgress }
 ```
 
-Worker 事件必须使用当前 `claimToken`，`sequence` 从正整数开始并递增；重复投递只能复用相同的 `eventId` 与内容。Daemon 不改写 Worker 的 `eventId` 或 `sequence`。不符合协议会清理进程组并生成 `WORKER_PROTOCOL_ERROR`。本次 Daemon 交付不实现 `apps/agent-runtime/dist/worker.js`，该文件由 Agent Runtime 工作项交付。
+Worker 事件必须使用当前 `claimToken`，`sequence` 从正整数开始并递增；重复投递只能复用相同的 `eventId` 与内容。Daemon 不改写 Worker 的 `eventId` 或 `sequence`。不符合协议会清理进程组并生成 `WORKER_PROTOCOL_ERROR`。默认入口 `apps/agent-runtime/dist/worker.js` 已随 Runtime 交付，监听真实 IPC。
 
 取消消息为 `{ type: 'cancel' }`。父进程轮询 `/control`，同时消费 ProgressAck 中的 `cancelRequested`。取消后先发 IPC，经过 `cancelGraceMs` 发送进程组 `SIGTERM`，再经过 `killGraceMs` 发送进程组 `SIGKILL`，即使父 Worker 已退出也覆盖残留后代。执行超时产生 `failed/RUN_TIMEOUT`，意外退出产生 `failed/WORKER_EXITED`。外部取消产生 `cancelled`，不会再被退出或超时覆盖为失败。`waiting_input` 作为本次执行的停止点处理。完成后仍占用 IPC 的 Worker 也会被有界清理。
 
 ## Outbox 与恢复
 
-`PersistentOutbox` 使用 `outbox.jsonl` 存储 append 和 ack 操作，每条记录写入后执行 `fsync`。消息先进入磁盘队列，收到 `accepted: true` 后才把 ack 同步到磁盘；重建后重放未确认事件，保留原来的 `eventId`、`sequence` 和 `claimToken`。控制面必须按事件身份幂等确认重试；返回 `accepted: false` 会停止 Daemon，保留待处理记录供排查。崩溃造成的最后半条记录会被截断，完整但损坏的 JSON 记录会阻止恢复。
+`PersistentOutbox` 使用 `outbox.jsonl` 存储 append 和 ack 操作，每条记录写入后执行 `fsync`。消息先进入磁盘队列，收到成功响应后把 ack 同步到磁盘；重建后重放未确认事件，保留原来的 `eventId`、`sequence` 和 `claimToken`。`accepted:false` 表示控制面已去重或状态已固定，不是传输失败；非成功 HTTP 响应仍按错误处理。崩溃造成的最后半条记录会被截断，完整但损坏的 JSON 记录会阻止恢复。
 
 Outbox 是受保护的本机运行状态，包含重发所需的 claimToken；不得作为普通日志或 Artifact 上传。设备 authToken 只保存在设备凭证文件。`payload` 顶层只保留以下字段，其他字段被丢弃：
 
 ```text
 text code message reason status turn toolCallId toolName reference evidence usage
-output result error checkpointId exitCode signal source pid
+output result error checkpointId exitCode signal source pid hookName inputHash phase
 ```
 
 嵌套对象过滤凭证、token、环境变量和 API Key 字段，并清理已知本机 Key、设备 token、当前 claimToken 以及常见凭证字符串。Checkpoint 按共享协议重建字段，采用相同文本清理。单条进度上限为 1 MiB，嵌套深度上限为 20。该过滤用于减少意外泄漏，可信 Worker 仍必须遵守自身的凭证保密规则。
@@ -106,4 +106,4 @@ pnpm --filter @titan/daemon test
 - `SIGTERM` 和 `SIGINT` 支持清理与落盘；Daemon 被 `SIGKILL` 或主机断电时无法立即清理仍在执行的 Worker，外部服务监督器及 Worker 的 IPC disconnect 处理应覆盖该情况。本次进程重启测试在 Worker 已完成且进度未确认时杀死 Daemon。
 - Outbox 暂不压缩，也不提供跨机器共享或多进程并发写入；状态目录锁约束一个实例。Heartbeat sequence 目前按进程递增，重新启动后从 1 开始。
 - 断网重放保证已落盘事件的交付；不会自动恢复被杀死 Worker 的内存执行状态。相同 Run 再次派发的序列起点需要控制面与 RuntimeWorker 共同约定，冻结 Dispatch 当前没有下一个序号字段。
-- 本模块未修改控制面 API、数据库、共享类型或 RuntimeWorker 入口；跨模块联调与真实模型验证由主线验收。
+- 跨模块联调已覆盖真实控制面、PostgreSQL、Daemon 和生产 Worker 的确定性 Adapter，以及无凭证等待和 ACK 丢失补发。真实供应商模型推理仍待 Key 后单独验收。

@@ -1,10 +1,12 @@
 # Phase 1 评审记录
 
-> 评审日期：2026-11-18
+> 评审日期：2026-11-22
 >
 > 当前评审结论：`approve`（Phase 1 Foundation / Headless Vertical Slice）
 >
-> 完整 Phase 1 状态：`in_progress`
+> 本轮代码复审：`approve`（已发现的派发、恢复、安全与完成判定缺陷均已复核修复）
+>
+> 完整 Phase 1 状态：`waiting_provider_acceptance`；目标 Docker PostgreSQL 17.12 全仓验证已通过
 
 ## 1. 需求覆盖
 
@@ -40,11 +42,13 @@
 
 以下内容仍是完整 Phase 1 的后续门禁，不影响当前 Foundation 验收通过：
 
-1. 使用真实 Codex API Key 和 Qwen 官方 API 凭证，在本机 Daemon 中完成一次受控 Session。
-2. 将 Daemon 控制面同步扩展为跨进程实时调度和自动派发。
-3. 将 SSE 客户端补齐自动断线重连和断档补拉。
-4. 将 CLI 的 SSE 自动断线重连和断档补拉接入实际 API。
-5. 将 Plan 批准扩展为多角色版本评审和完整人工门禁。
+1. 使用真实 Codex API Key 和 Qwen 官方 API 凭证，在本机 Daemon 中各完成一次受控 Session，核对事件、Hook/Tool 审计、真实产物与 SHA-256。
+
+目标 `postgres:17-alpine` 环境已在最终验证中恢复，实际 PostgreSQL 17.12、Node 22 下全部 229 个测试通过。
+
+本轮已交付自动派发和持久 Outbox、暂停/取消/恢复、SSE 重连补拉、QRSPI 单用户审批链、本地 Skill 加载、原生 Codex 与 Qwen 多轮工具协议。多角色团队评审属于后续协作阶段，不作为额外 Phase 1 范围。
+
+复审修复了秘密在快照落盘前未过滤、目录 symlink 越界、失效 Claim 占用、静默执行续租、上下文恢复、失败测试假完成、工具结果不确定状态、跨 Session 日志串用和后代进程清理。复审批准只证明这些已发现缺陷完成修复，不代替完整产品验收或任意风险的安全证明。
 
 ## 5. 回滚路径
 

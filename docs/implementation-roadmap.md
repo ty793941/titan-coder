@@ -22,7 +22,7 @@ Phase 5  高级自动化：Teams、Cron、Workflow Marketplace、规模化部署
 
 这是第一个可运行阶段。通过 REST API、CLI 和 SSE 事件流交互，不交付 Web UI；只接入 Codex 和 Qwen。
 
-当前仓库已完成 Phase 1 的协议、领域模型、Control Plane、基础 Agent Core、本机 Worktree/Daemon 能力和可验证垂直切片，评审状态记录在 [`docs/phase-1-review.md`](phase-1-review.md)。真实 Runtime Transport、Daemon 控制面同步和完整实时 SSE 发布仍属于本阶段下一轮补齐项。
+当前仓库已提供原生 Codex App Server、Qwen 官方 API 适配、受认证的持久化 Run 派发、常驻 Daemon/Worker、本地 Outbox、检查点与工具日志、SSE 重连、QRSPI 审批和本机 Skill 加载。无 Key 联调已覆盖跨进程真实文件与审计归档，真实 Codex/Qwen 推理仍待凭证后验收。完成边界见 [`docs/phase-1-review.md`](phase-1-review.md)，操作见 [`docs/phase-1-acceptance.md`](phase-1-acceptance.md)。
 
 ### 2.1 协议与边界冻结
 

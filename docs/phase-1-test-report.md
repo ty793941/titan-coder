@@ -1,64 +1,69 @@
 # Phase 1 测试报告
 
-> 报告日期：2026-11-18
+> 报告日期：2026-11-22
 >
 > 分支：`chore/initial-project`
 >
-> 阶段：Headless 本机 MVP 基础闭环
+> 阶段：Headless 本机执行增量；真实模型推理待凭证验收
 
 ## 1. 验证环境
 
-- Node.js：`v24.5.0`，项目引擎约束为 `>=22.0.0`。
+- Node.js：本轮 `v22.23.5`，项目要求 Node 22。
 - pnpm：`10.34.5`。
-- PostgreSQL：Docker Compose 启动的 `postgres:17-alpine` 容器，映射到 `127.0.0.1:55432`，数据库名为 `titan`，容器状态为 `healthy`。
-- Docker Compose：`infra/docker-compose.yml` 配置通过，Control Plane 集成测试已使用 Compose PostgreSQL 实际执行。
-- 测试数据库连接：`postgresql://titan@127.0.0.1:55432/titan`。
+- PostgreSQL：最终验证使用 Docker `postgres:17-alpine`，实际版本 `17.12`，容器 `healthy`，监听 `127.0.0.1:55432`。测试按随机 schema 隔离并清理。
+- Docker Compose：配置校验和目标数据库运行验证通过。此前使用临时 `14.19 (Homebrew)` 的联调也通过；最终已停止该临时实例，释放端口并在 PostgreSQL 17 重跑完整测试。
+- Codex：本机 `codex-cli 0.147.0`，启用 `TITAN_CODEX_BINARY` 完成真实 App Server 认证、线程和恢复协议探测；使用合成测试 Key，不发起模型推理。
+- Protobuf：本机 protoc 编译和消息往返测试通过；不代表已运行 ConnectRPC 服务。
+- 最终测试数据库连接：`postgresql://titan:titan@127.0.0.1:55432/titan`（仅开发 Compose 默认凭证）。
 
 ## 2. 验证命令
 
 ```bash
-DATABASE_URL=postgresql://titan@127.0.0.1:55432/titan pnpm lint
-DATABASE_URL=postgresql://titan@127.0.0.1:55432/titan pnpm typecheck
-DATABASE_URL=postgresql://titan@127.0.0.1:55432/titan pnpm test
-DATABASE_URL=postgresql://titan@127.0.0.1:55432/titan pnpm build
-docker compose -f infra/docker-compose.yml config
+pnpm build
+pnpm lint
+pnpm typecheck
+DATABASE_URL=postgresql://titan:titan@127.0.0.1:55432/titan TITAN_CODEX_BINARY="$(command -v codex)" pnpm test --force
+node packages/contracts/openapi/generate.mjs --check
+docker compose -f infra/docker-compose.yml config --quiet
 ```
 
-上述命令均以退出码 `0` 完成；Control Plane 测试另外使用 `postgresql://titan:titan@127.0.0.1:55432/titan` 验证。
+上述检查以退出码 `0` 完成。测试配置关闭缓存并依赖本包构建，避免沿用旧 dist 或数据库检查结果。当前 `lint` 脚本实际执行 TypeScript 静态检查，没有独立 ESLint 检查。
 
 ## 3. 测试覆盖
 
 | 模块 | 验证内容 | 结果 |
 |---|---|---|
-| `@titan/contracts` | 请求 Schema、事件身份和边界校验 | 2 tests passed |
+| `@titan/contracts` | Zod、OpenAPI 路由/Schema 一致性、Proto 编译及往返 | 24 tests passed |
 | `@titan/domain` | Task/Run 状态转换、Artifact 校验和 SHA-256 | 4 tests passed |
-| `@titan/agent-core` | Permission、Hook、Tool 幂等、Goal、Checkpoint、Codex/Qwen Provider Adapter | 9 tests passed |
+| `@titan/agent-core` | 原生 Provider、多轮工具、恢复、失败测试阻断、持久日志与清理 | 57 tests passed |
 | `@titan/daemon-protocol` | Daemon 注册和事件信封字段 | 1 test passed |
-| `@titan/daemon` | 工作区路径限制、Git Worktree、心跳重连 | 3 tests passed |
-| `@titan/cli` | Task、Session、Run Events、Daemon JSON 输出和稳定错误码 | 6 tests passed |
-| `@titan/agent-runtime` | 无证据时 Goal 保持继续状态 | 1 test passed |
-| `@titan/control-plane` | PostgreSQL 项目/Task、幂等、Run 重试、空 JSON body、Artifact、SSE、Daemon 控制面、Plan 门禁 | 8 tests passed |
+| `@titan/daemon` | 常驻子进程、磁盘 Outbox、取消、超时、Worktree 与本机策略 | 24 tests passed |
+| `@titan/cli` | 真 HTTP、退出码、增量 SSE、重连、断档补拉与暂停恢复 | 30 tests passed |
+| `@titan/agent-runtime` | 真实文件、Worker、Skill 锁定、秘密与工作区边界 | 31 tests passed |
+| `@titan/control-plane` | 认证、派发、租约、冷库/重启、产物审计、SSE、QRSPI、暂停恢复 | 58 tests passed |
 
-全仓共报告 `34 tests passed`，无失败测试。
+本轮全仓共 `229 tests passed`，0 失败、0 跳过；Turborepo 测试及其构建共 16 个任务通过。不设置 `TITAN_CODEX_BINARY` 时跳过 1 项本机 Codex 探测；缺少 protoc 时另外跳过 3 项 Proto 测试，必须查看具体输出。
 
 ## 4. 端到端证据
 
-`apps/control-plane/test/phase-1.e2e.test.ts` 验证了以下顺序：
+`apps/control-plane/test/phase-1.e2e.test.ts` 保留基础 API 记录闭环。新增 `daemon-runtime.e2e.test.ts` 使用生产 Daemon、生产 Runtime Worker 和确定性 Adapter 验证：
 
 1. 创建 Project 和 Task。
-2. 创建 Session 和首个 Run。
-3. 将首个 Run 标记为 `failed`，保留 `TOOL_EXECUTION_FAILED`。
-4. 为同一 Session 创建第二个 Run，递增 `attempt` 并保留旧 Run。
-5. 标记第二个 Run 为 `completed`。
-6. 写入 `questions`、`plan`、`source-diff` 和 `test-report` Artifact。
-7. 查询 Artifact 列表并确认类型集合。
-8. 读取 Run SSE，确认出现 `event: run.completed`。
+2. 批准 Plan、创建 execution Session 与 queued Run。
+3. Daemon 自动注册、认领并启动真实 Node 子进程。
+4. Worker 经 Permission、前后 Hook 和持久工具日志写入不可变文件。
+5. 进度经本机 Outbox 上传，数据库登记 Artifact、Checkpoint、Hook 和工具执行终态。
+6. 从 Artifact API 取回 URI，读取真实文件并核对 SHA-256、Session 归属及上游 Plan。
+7. SSE 返回自动执行产生的 run.completed。
+8. 人为丢失进度 ACK 后幂等重放，仍正常完成且不重复执行。
+9. 使用生产 Worker 但没有 Key 的场景进入 waiting_input，不伪造模型成功。
+
+其他测试覆盖无 Key 的原生 Codex 协议子进程、Qwen 本机 HTTP、取消顽固后代、暂停后迟到结果保护、恢复为新 Run、过期认领释放、静默任务续租、完整 QRSPI 批准链、符号链接拒绝和本地 Skill 摘要锁。
 
 ## 5. 已知限制
 
-- Codex API Key 和 Qwen 官方 API Transport 已完成可注入实现、凭证引用检查和事件归一化；尚未使用真实凭证执行外部模型 Session。
-- Daemon 的工作区、Worktree、进程组和重连状态已可在本机包内验证；Control Plane 已支持 Daemon 注册、心跳、撤销和事件 Outbox 去重，跨进程实时调度仍需下一轮接入。
-- SSE 已支持历史回放、`Last-Event-ID`、序列断档错误和 `follow=true` 持久轮询订阅；CLI 端的自动断线重连和补拉仍需下一轮接入。
-- Artifact 内容使用本地受控目录，S3/MinIO 只保留基础设施配置，尚未接入对象存储适配器。
-- CLI 已实现 Task 创建、Session 创建、Run 查询、Run Events SSE、Daemon 注册/状态/撤销命令；自动断线重连和补拉仍需下一轮接入。
-- Daemon 已支持控制面注册、心跳、撤销和事件 Outbox 去重；跨进程实时调度和 Daemon 自动派发仍需下一轮接入。
+- 尚未使用真实 Codex/Qwen Key 执行模型推理；合成 Key 的协议认证探测不等价于账号调用成功。
+- pause/resume 是检查点重建上下文和新 Run，不是跨进程原生会话热迁移。结果不确定的工具日志安全阻断，需要人工核实，不能保证任意命令恰好一次。
+- 文件/命令工具提供白名单、秘密检查和进程监督，不提供通用 OS 沙箱。测试文件本身是本机可信代码；恶意并发目录替换仍需更强宿主隔离。
+- SSE 直接读取 PostgreSQL 持久事件；Redis Streams 发布、完整 ConnectRPC 服务及云端 Handoff 未部署，详见协议说明。
+- GoalGate 是有限规则，检查证据和未解决失败，不自动证明所有自然语言业务目标。

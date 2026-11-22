@@ -29,7 +29,7 @@ type ToolRequestPayload = { id?: unknown; name?: unknown; arguments?: unknown };
 function asText(payload: unknown): string {
   if (typeof payload === 'string') return payload;
   if (payload && typeof payload === 'object' && 'text' in payload && typeof payload.text === 'string') return payload.text;
-  return JSON.stringify(payload);
+  return JSON.stringify(payload) ?? '';
 }
 
 function checkpointText(text: string): string {
