@@ -181,7 +181,9 @@ proto3 编译只保证语法、字段类型与序列化，不验证非空、枚�
 
 ## 10. Git / Patch / WorkspaceSnapshot
 
-本机已有 WorktreeManager 创建分支、记录 baseRevision 并约束授权路径。这里冻结的是后续代码同步的格式，没有增加 Snapshot 创建、下载、应用 Patch 或上传 API。
+本机 WorktreeManager 已提供创建分支和 `exportChanges`：导出私有 UUID bundle，包含 Git binary patch、本机 snapshot.json 与排除预览，保留源 index 和源提交。这里的 Proto 继续冻结后续跨环境同步格式，没有增加下载、应用 Patch 或上传 API。
+
+本机 bundle 的 `excludes` 是最小排除 pattern 字符串数组，`excludedFiles` 是额外的本机预览元数据；`patchUri` 为相对 bundle 的 `patch.diff`。untracked/binary 已直接编码进本机 Patch，无单独 contentUri。本机 bundle 不宣称是已经完成传输、权限和跨环境校验的 HandoffSnapshot，不能按 Proto 字段名称相似就直接迁移。
 
 WorkspaceSnapshot 冻结如下字段，Proto 的 snake_case 与文档 lowerCamelCase 对应：
 

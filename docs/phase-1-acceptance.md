@@ -77,6 +77,7 @@ DATABASE_URL=postgresql://titan:titan@127.0.0.1:55432/titan pnpm --filter @titan
 | SSE 增量、取消、慢查询和数据库异常隔离 | `apps/control-plane/test/events.integration.test.ts` |
 | CLI 真 HTTP、真实退出码、重连与断档补拉 | `apps/cli/test/http.test.ts` |
 | Daemon 常驻进程、子进程取消与本机磁盘 Outbox | `apps/daemon/test/daemon-runner.integration.test.ts` |
+| Git Patch、二进制/未跟踪文件、源索引不变和敏感排除 | `apps/daemon/test/git-evidence.test.ts` |
 | 真实 stdio Codex 协议与离线故障场景 | `packages/agent-core/test/codex-provider.test.ts` |
 | Qwen 本地 HTTP 历史、模型与工具回合 | `packages/agent-core/test/qwen-provider.test.ts` |
 | 本机 Skill 锁定、摘要及权限拒绝 | `apps/agent-runtime/test/skills.test.ts` |
@@ -162,6 +163,32 @@ Skill 仅从工作区 `.titan/skills/skill-lock.json` 发现。锁中记录 `id/
 
 摘要不符、越界、符号链接、过大文件和 Tool 权限扩张必须阻断。`pnpm test` 只有本机显式允许 trustedCode 才执行；本机测试代码拥有用户权限，当前不提供通用 OS 文件系统与网络沙箱。
 
-## 7. 完成边界
+## 7. 导出本机代码变更证据
+
+从 Daemon 模块使用 `WorktreeManager.exportChanges`。这是本机模块接口，不是云端上传 API；先完成构建：
+
+```javascript
+import { WorktreeManager } from './apps/daemon/dist/main.js';
+
+const manager = new WorktreeManager('/absolute/authorized-root');
+const worktree = await manager.create({
+  repositoryPath: '/absolute/authorized-root/project',
+  branchName: 'task/acceptance',
+});
+
+// 在 worktree.path 中完成受控修改后执行。
+const bundle = await manager.exportChanges({
+  worktreePath: worktree.path,
+  baseRevision: worktree.baseRevision,
+  outputDirectory: '/absolute/authorized-root/evidence',
+});
+console.log(bundle.patchPath, bundle.snapshot.patchSha, bundle.previewPath);
+```
+
+导出文件为 `patch.diff`、`snapshot.json`、`preview.json`。核对基线、变更清单、排除原因和 SHA-256；在另外的临时克隆中运行 `git apply --check` 再做 apply roundtrip 验收。源索引、源提交和用户 Git 配置必须保持不变。超限、非 linked Worktree、非祖先基线、越界路径必须失败。
+
+本机 bundle 将 untracked/binary 内容直接放进 Git binary patch；`excludedFiles` 是本机额外预览信息，不能直接当作云端 Handoff。导出不会上传或在用户工作树中应用 Patch。
+
+## 8. 完成边界
 
 本轮自动化验证不能替代真实 Codex/Qwen Key 推理验收。ConnectRPC 运行服务、云端 Handoff、跨机器 Snapshot 应用、多角色团队审批属于冻结接口或后续阶段，未宣称部署。基础 GoalGate 只检查 Provider 正常结束、预算、真实产物/通过测试证据和未解决的失败测试，不自动证明任意自然语言业务验收标准。

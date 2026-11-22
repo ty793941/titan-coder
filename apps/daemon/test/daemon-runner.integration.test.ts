@@ -81,7 +81,7 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
   const options: DaemonRunnerOptions = {
     baseUrl: `http://127.0.0.1:${address.port}`, stateDirectory: join(root, '.titan'), workspaceRoots: [workspace],
     runnerCommand: process.execPath, runnerArgs: [fixture], pollIntervalMs: 15, heartbeatIntervalMs: 30,
-    retryMaxMs: 80, requestTimeoutMs: 150, cancelGraceMs: 30, killGraceMs: 100,
+    retryMaxMs: 80, requestTimeoutMs: 1000, cancelGraceMs: 30, killGraceMs: 100,
     ...overrides,
   };
   const sessions: Array<{ abort: AbortController; promise: Promise<void>; errors: unknown[] }> = [];

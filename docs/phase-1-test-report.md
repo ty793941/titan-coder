@@ -27,7 +27,7 @@ node packages/contracts/openapi/generate.mjs --check
 docker compose -f infra/docker-compose.yml config --quiet
 ```
 
-上述检查以退出码 `0` 完成。测试配置关闭缓存并依赖本包构建，避免沿用旧 dist 或数据库检查结果。当前 `lint` 脚本实际执行 TypeScript 静态检查，没有独立 ESLint 检查。
+Headless 构建、类型检查、240 项测试、OpenAPI 和 Compose 校验通过；最新全仓 lint 的并行工作台依赖问题见下文，不将其记为通过。测试配置关闭缓存并依赖本包构建，避免沿用旧 dist 或数据库检查结果。Headless `lint` 脚本实际执行 TypeScript 静态检查，没有独立 ESLint 检查。
 
 ## 3. 测试覆盖
 
@@ -37,12 +37,14 @@ docker compose -f infra/docker-compose.yml config --quiet
 | `@titan/domain` | Task/Run 状态转换、Artifact 校验和 SHA-256 | 4 tests passed |
 | `@titan/agent-core` | 原生 Provider、多轮工具、恢复、失败测试阻断、持久日志与清理 | 57 tests passed |
 | `@titan/daemon-protocol` | Daemon 注册和事件信封字段 | 1 test passed |
-| `@titan/daemon` | 常驻子进程、磁盘 Outbox、取消、超时、Worktree 与本机策略 | 24 tests passed |
+| `@titan/daemon` | 常驻子进程、磁盘 Outbox、取消、超时、Worktree、Git Patch 导出与本机策略 | 35 tests passed |
 | `@titan/cli` | 真 HTTP、退出码、增量 SSE、重连、断档补拉与暂停恢复 | 30 tests passed |
 | `@titan/agent-runtime` | 真实文件、Worker、Skill 锁定、秘密与工作区边界 | 31 tests passed |
 | `@titan/control-plane` | 认证、派发、租约、冷库/重启、产物审计、SSE、QRSPI、暂停恢复 | 58 tests passed |
 
-本轮全仓共 `229 tests passed`，0 失败、0 跳过；Turborepo 测试及其构建共 16 个任务通过。不设置 `TITAN_CODEX_BINARY` 时跳过 1 项本机 Codex 探测；缺少 protoc 时另外跳过 3 项 Proto 测试，必须查看具体输出。
+本轮 Headless 清单共 `240 tests passed`，0 失败、0 跳过；对应 Turborepo 测试及构建共 16 个任务通过。不设置 `TITAN_CODEX_BINARY` 时跳过 1 项本机 Codex 探测；缺少 protoc 时另外跳过 3 项 Proto 测试，必须查看具体输出。
+
+这份报告不覆盖并行新增的 `apps/web-console`：它在本轮测试结束后被 Workspace 发现，随后全仓 lint 因缺少 vue-tsc 失败。本轮 Daemon lint/typecheck 和 OpenAPI 一致性已单独验证通过，不将后续全仓 lint 失败描述成成功。
 
 ## 4. 端到端证据
 
@@ -59,6 +61,8 @@ docker compose -f infra/docker-compose.yml config --quiet
 9. 使用生产 Worker 但没有 Key 的场景进入 waiting_input，不伪造模型成功。
 
 其他测试覆盖无 Key 的原生 Codex 协议子进程、Qwen 本机 HTTP、取消顽固后代、暂停后迟到结果保护、恢复为新 Run、过期认领释放、静默任务续租、完整 QRSPI 批准链、符号链接拒绝和本地 Skill 摘要锁。
+
+`apps/daemon/test/git-evidence.test.ts` 另验证 11 项本机代码证据行为：staged/unstaged/新提交/untracked 分类、二进制与 rename/delete、两个源索引不变、临时克隆 apply roundtrip、敏感父目录及旧内容排除、symlink/submodule 排除、本机颜色/路径配置隔离、文件目录互换和基线/摘要校验。首次全套重启测试受 150ms 测试 HTTP 超时干扰失败；调至 1000ms 后保留原断言重跑，通过完整清单。
 
 ## 5. 已知限制
 
