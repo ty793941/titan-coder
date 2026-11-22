@@ -1,0 +1,3266 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Titan Phase 1 Control Plane",
+    "version": "1.1.0",
+    "description": "按现有 NestJS Controller 与 Zod 冻结的 HTTP/JSON + SSE 契约，包含 pause 与创建新 Run 的 resume；不提供原进程或原生模型会话热恢复。ConnectRPC、跨环境 Handoff、Git Snapshot 传输仅冻结预留协议。认证覆盖以各操作 security 为准。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3000",
+      "description": "本机默认端口；CONTROL_PLANE_PORT 可覆盖。"
+    }
+  ],
+  "security": [],
+  "x-generation": {
+    "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
+    "template": "packages/contracts/openapi/generate.mjs",
+    "templateVersion": 2,
+    "generatedAt": "2026-11-22T11:20:41.820Z"
+  },
+  "x-reserved-only": [
+    "ConnectRPC",
+    "SessionHandoff",
+    "GitSnapshotTransfer"
+  ],
+  "paths": {
+    "/api/projects": {
+      "post": {
+        "operationId": "createProject",
+        "summary": "创建 Project",
+        "description": "创建本机开发项目。 Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少有一个非空值；去重作用域见协议说明。",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建或相同幂等请求重放；当前控制器均返回 201。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/projects/{projectId}/tasks": {
+      "post": {
+        "operationId": "createTask",
+        "summary": "创建 Task",
+        "description": "创建初始 questions 阶段 Task；humanOwner 当前接受但不持久化。 Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少有一个非空值；去重作用域见协议说明。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建或相同幂等请求重放；当前控制器均返回 201。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/tasks/{taskId}": {
+      "get": {
+        "operationId": "getTask",
+        "summary": "查询 Task",
+        "description": "查询 Task",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task 业务事实。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/tasks/{taskId}/events": {
+      "get": {
+        "operationId": "listTaskEvents",
+        "summary": "查询 Task 关联事件",
+        "description": "返回 JSON 数组，按 occurredAt 升序；可能包含多个 Run 各自的序号，不能当成单一 SSE 游标。未知 Task 当前返回空数组。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "关联事件数组。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventEnvelope"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/tasks/{taskId}/stage": {
+      "post": {
+        "operationId": "advanceTaskStage",
+        "summary": "推进相邻 QRSPI 阶段",
+        "description": "推进相邻 QRSPI 阶段",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的 Task，version 加一。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/tasks/{taskId}/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "创建 Session",
+        "description": "创建项目经理 Session；execution 可省略，提供时要求最新已批准 planHash、本机可用 Daemon 和 workspace 授权。 Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少有一个非空值；去重作用域见协议说明。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建或相同幂等请求重放；当前控制器均返回 201。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/sessions/{sessionId}": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "查询 Session",
+        "description": "查询 Session",
+        "security": [],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "不包含 execution 配置、goal 或内部 version。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/runs": {
+      "post": {
+        "operationId": "createRun",
+        "summary": "创建 Run",
+        "description": "创建新的 Run attempt；恢复使用同一 Session 的 checkpointId，旧 Run 保留。 Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少有一个非空值；去重作用域见协议说明。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建或相同幂等请求重放；当前控制器均返回 201。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/runs/{runId}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "查询 Run",
+        "description": "查询 Run",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run 当前状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/runs/{runId}/pause": {
+      "post": {
+        "operationId": "pauseRun",
+        "summary": "暂停 Run 并请求停止执行",
+        "description": "同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "原 Run 的 paused 业务视图，不创建新 attempt。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/runs/{runId}/resume": {
+      "post": {
+        "operationId": "resumeRun",
+        "summary": "从 paused Run 创建新尝试",
+        "description": "源 Run 必须 paused；同一 Session 创建新 Run，attempt 递增并置 queued，源 Run 保持 paused。Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少满足一处，作用域为 run:{runId}:resume；同键同正文重放仍返回 201。checkpointId 可指定同一 Session 的检查点，省略时选源 Run 最新检查点，没有则创建无检查点的新尝试。planHash 可省略但不能绕过 Session 绑定及最新已批准 Plan 校验；已有 queued/starting/running/waiting_input Run 返回 409 VERSION_CONFLICT。按 Session execution 配置重新排队，不恢复原进程或原生模型会话。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新 Run 或幂等重放的同一新 Run；旧 paused Run 保留。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true,
+        "x-idempotency-scope": "run:{runId}:resume",
+        "x-resume-behavior": {
+          "createsNewAttempt": true,
+          "sourceRunStatus": "paused",
+          "nativeHotResume": false,
+          "checkpointFallback": "latest-on-source-run"
+        }
+      }
+    },
+    "/api/runs/{runId}/fail": {
+      "post": {
+        "operationId": "failRun",
+        "summary": "标记无调度作业的 Run 失败",
+        "description": "标记无调度作业的 Run 失败",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "无正文；真实执行 Run 只能由认证的 Daemon progress 上报失败。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/runs/{runId}/complete": {
+      "post": {
+        "operationId": "completeRun",
+        "summary": "标记无调度作业的 Run 完成",
+        "description": "标记无调度作业的 Run 完成",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "无正文；真实执行 Run 只能由认证的 Daemon progress 上报完成。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/runs/{runId}/cancel": {
+      "post": {
+        "operationId": "cancelRun",
+        "summary": "请求取消 Run",
+        "description": "同步记录 cancelled 与 cancelRequested，Daemon 轮询 control 后终止进程。已终态 Run 原样返回；响应不证明操作系统进程已经退出。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run 业务状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/tasks/{taskId}/artifacts": {
+      "post": {
+        "operationId": "createArtifact",
+        "summary": "创建新版本 Artifact",
+        "description": "建议显式提供 Idempotency-Key；省略时控制器生成 artifact-<Date.now()>，不能据此承诺安全重放。正文不接受 idempotencyKey。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新版本 Artifact 或幂等重放。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": false
+      },
+      "get": {
+        "operationId": "listArtifacts",
+        "summary": "列出 Task Artifact",
+        "description": "列出 Task Artifact",
+        "security": [],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "resolution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "仅 latest-approved 启用按类型选择最高已批准版本；其他值返回全部，按 createdAt 升序。未知 Task 返回空数组。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact 数组。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Artifact"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/artifacts/{artifactId}": {
+      "get": {
+        "operationId": "getArtifact",
+        "summary": "查询 Artifact",
+        "description": "查询 Artifact",
+        "security": [],
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "元数据，不包含文件正文。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/artifacts/{artifactId}/approve": {
+      "post": {
+        "operationId": "approveArtifact",
+        "summary": "批准最新 QRSPI 准备工件",
+        "description": "仅 questions/research/design/structure/plan 的最新版本可批准；重复批准已批准版本直接返回。记录审批事件及审计；不等同于阶段推进。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已批准 Artifact。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/runs/{runId}/events": {
+      "get": {
+        "operationId": "streamRunEvents",
+        "summary": "重放或跟随 Run SSE",
+        "description": "Last-Event-ID 为 Run 事件 sequence（非 eventId），缺省 0；从其后重放。仅 follow=true 持续轮询（250ms），空闲约 15s 注释心跳。id 为 sequence，event 为 eventType，data 为 EventEnvelope JSON。起流前返回 ApiError；起流后异常以 stream.error 数据帧结束，不能改 HTTP 状态。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/LastEventId"
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "仅字符串 true 开启持续跟随；省略或其他值仅重放后关闭。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream；注释 connected/heartbeat 不推进游标。",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "X-Accel-Buffering": {
+                "schema": {
+                  "type": "string",
+                  "const": "no"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "id: 1\nevent: run.created\ndata: {\"eventId\":\"evt_1\",\"eventType\":\"run.created\",\"payloadVersion\":1,\"sequence\":1,\"traceId\":\"trace_1\",\"projectId\":\"project_1\",\"runId\":\"run_1\",\"actor\":{\"type\":\"system\",\"id\":\"control-plane\"},\"occurredAt\":\"2026-11-21T00:00:00.000Z\",\"payload\":{}}\n\n"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-sse-data-schema": {
+          "$ref": "#/components/schemas/EventEnvelope"
+        },
+        "x-sse-error-schema": {
+          "$ref": "#/components/schemas/StreamError"
+        }
+      }
+    },
+    "/api/daemons/register": {
+      "post": {
+        "operationId": "registerDaemon",
+        "summary": "注册 Daemon",
+        "description": "本机开发入口当前不要求 Bearer；每次调用创建新 daemonId 与令牌，不支持 Idempotency-Key 去重。cloud 仅允许能力声明，执行策略拒绝 cloud 作业。",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DaemonRegistration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Daemon 元数据及一次性返回的 authToken。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonRegistrationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}": {
+      "get": {
+        "operationId": "getDaemon",
+        "summary": "查询 Daemon 状态",
+        "description": "当前公开读取本机元数据。lastHeartbeatAt 距今超过 30s 显示 reconnecting、超过 90s 显示 disconnected；revoked 优先。",
+        "security": [],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "不含认证令牌或哈希。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/heartbeat": {
+      "post": {
+        "operationId": "heartbeatDaemon",
+        "summary": "更新 Daemon 心跳",
+        "description": "更新 Daemon 心跳",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DaemonHeartbeatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "服务端接收时间与 ready 状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/revoke": {
+      "post": {
+        "operationId": "revokeDaemon",
+        "summary": "撤销当前认证 Daemon",
+        "description": "撤销当前认证 Daemon",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "无正文；后续认证返回 PERMISSION_DENIED。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/events": {
+      "post": {
+        "operationId": "appendDaemonEvent",
+        "summary": "接收 Daemon 通用 Outbox 事件",
+        "description": "接收 Daemon 通用 Outbox 事件",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DaemonEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "重复 (daemonId,eventId)，created=false。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonEventAck"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "首次接收，created=true。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonEventAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listDaemonEvents",
+        "summary": "查询通用 Outbox 接收记录",
+        "description": "查询通用 Outbox 接收记录",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "按 sequence 升序；当前不驱动 Run 状态机。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DaemonStoredEvent"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/claim": {
+      "post": {
+        "operationId": "claimRun",
+        "summary": "领取一个 Run 调度作业",
+        "description": "空正文或 {}；ready Daemon 按容量领取 queued 作业并获取 120s 租约。过期租约在后续 claim 扫描时转人工恢复；不自动重放工具。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "包含租约 claimToken 的 RunDispatch。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDispatch"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "无可领取作业或已达容量，无正文。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/runs/{runId}/progress": {
+      "post": {
+        "operationId": "reportRunProgress",
+        "summary": "上报 Run 进度与检查点",
+        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunProgress"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "确认接收及取消标记；paused 或终态进度可能 accepted=false。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/runs/{runId}/control": {
+      "get": {
+        "operationId": "getRunControl",
+        "summary": "轮询取消或暂停停止信号与 Run 状态",
+        "description": "暂停复用 cancelRequested=true 并返回 status=paused，请求 Daemon 停止进程。ready Daemon 对有效 claimed 作业的轮询会续租 120s；paused 作业不续租。resume 通过用户侧 REST 创建新 Run，不在此轮询中热恢复。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "停止标记和 Run 状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunControl"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{daemonId}/runs/{runId}/job": {
+      "get": {
+        "operationId": "getExecutionJob",
+        "summary": "查询调度作业及进度游标",
+        "description": "查询调度作业及进度游标",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "daemonId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daemon 归属校验后的作业元数据，不含 claimToken。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "DaemonBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "64 lowercase hexadecimal characters",
+        "description": "Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": "Project/Task/Session/Run 创建及 Run resume 可改用正文 idempotencyKey，请求头优先；trim 后校验长度，不是 Daemon 事件去重键。"
+      },
+      "ArtifactIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Artifact 只读请求头，当前不校验长度；省略时由控制器生成基于 Date.now() 的键，不能作为安全重放保证。"
+      },
+      "TraceId": {
+        "name": "X-Trace-Id",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "HttpErrorFilter 回传到错误 traceId；当前成功事件并不自动继承该请求头。"
+      },
+      "LastEventId": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d+$",
+          "default": "0"
+        },
+        "description": "Run 内最后已消费的 sequence，非 eventId；须为 0..9007199254740991 且不得超过服务端最新游标。"
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "统一错误：400 校验/状态/门禁（含 APPROVAL_REQUIRED、DAEMON_UNAVAILABLE）；401 无效 Daemon 凭证；403 权限；404 不存在；409 幂等、版本、序号、Plan 冲突；500 未归类异常。retryable 由错误码决定，不由状态码决定。",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ProjectCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "goal": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name",
+          "goal"
+        ],
+        "additionalProperties": true,
+        "x-unknown-fields": "stripped"
+      },
+      "TaskCreateRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "goal": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "humanOwner": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "title",
+          "goal",
+          "acceptanceCriteria",
+          "priority"
+        ],
+        "additionalProperties": true,
+        "x-unknown-fields": "stripped"
+      },
+      "SessionCreateRequest": {
+        "type": "object",
+        "properties": {
+          "entryAgent": {
+            "type": "string",
+            "const": "project-manager"
+          },
+          "goal": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "planHash": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "daemonId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionConfig"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "entryAgent",
+          "goal"
+        ],
+        "additionalProperties": false,
+        "description": "execution 可省略；真实执行必须提供最新已批准 Plan 的 planHash。daemonId 如提供，必须与 execution.daemonId 一致。"
+      },
+      "RunCreateRequest": {
+        "type": "object",
+        "properties": {
+          "inputSnapshotId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "checkpointId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "planHash": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "供创建 Run 与恢复 paused Run 共用。checkpointId、planHash 均可省略，显式 checkpointId 必须属于同一 Session。resume 未指定 checkpointId 时选取源 Run 最新检查点，没有检查点则创建无检查点的新尝试；旧 Run 保持 paused。inputSnapshotId 当前仅被接受，不持久化、不恢复上下文。"
+      },
+      "ExecutionConfig": {
+        "type": "object",
+        "properties": {
+          "daemonId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "qwen"
+            ]
+          },
+          "credentialRef": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "本机凭证引用；只允许引用，不允许模型 API Key 明文。"
+          },
+          "modelRef": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "workspacePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "allowedTools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 100
+          },
+          "maxTurns": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 10000
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 86400000
+          }
+        },
+        "required": [
+          "daemonId",
+          "runtime",
+          "credentialRef",
+          "workspacePath",
+          "allowedTools",
+          "maxTurns",
+          "timeoutMs"
+        ],
+        "additionalProperties": false,
+        "description": "只支持 ready 的 local Daemon，runtime 必须在 capabilities 中；workspacePath 必须为绝对路径且位于已注册 workspaceRoots 内。"
+      },
+      "ExecutionCheckpoint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "tool"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 32768
+                }
+              },
+              "required": [
+                "role",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "successfulTools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "name": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "inputHash": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "output": {}
+              },
+              "required": [
+                "id",
+                "name",
+                "inputHash",
+                "output"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "reference": {
+                  "type": "string",
+                  "maxLength": 10000
+                }
+              },
+              "required": [
+                "kind",
+                "reference"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          }
+        },
+        "required": [
+          "id",
+          "messages",
+          "successfulTools",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "description": "恢复记录；控制面脱敏后 JSON 的 UTF-8 字节大小不得超过 1 MiB。output 必须存在，可以为任意 JSON 值（含 null）。"
+      },
+      "RunProgress": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sequence": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "claimToken": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "running",
+              "output",
+              "checkpoint",
+              "completed",
+              "failed",
+              "cancelled",
+              "waiting_input"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "checkpoint": {
+            "$ref": "#/components/schemas/ExecutionCheckpoint"
+          }
+        },
+        "required": [
+          "eventId",
+          "sequence",
+          "claimToken",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "checkpoint"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "checkpoint"
+              ]
+            }
+          }
+        ],
+        "description": "claimToken 是领取任务的租约证明，不是模型凭证。sequence 在单个 execution_job 内从 1 连续递增；eventId 全局唯一；payload.source 存在时需符合 ProgressOutput。",
+        "x-output-schema": {
+          "$ref": "#/components/schemas/ProgressOutput"
+        }
+      },
+      "ProgressOutput": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "hook",
+              "tool"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "toolName": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "toolCallId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "hookName": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "inputHash": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 32768
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "before",
+              "after"
+            ]
+          },
+          "output": {}
+        },
+        "required": [
+          "source",
+          "status",
+          "toolName",
+          "toolCallId"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactWriteOutput": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "artifact"
+          },
+          "reference": {
+            "type": "string",
+            "pattern": "^[aA][rR][tT][iI][fF][aA][cC][tT]://[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/.+$",
+            "x-pattern-flags": "i"
+          },
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "artifactType": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "source-diff",
+              "test-report",
+              "review",
+              "release-package",
+              "decision-record"
+            ],
+            "default": "source-diff"
+          },
+          "output": {
+            "type": "string",
+            "const": "written"
+          }
+        },
+        "required": [
+          "kind",
+          "reference",
+          "uri",
+          "checksum",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "DaemonRegistration": {
+        "type": "object",
+        "properties": {
+          "machineName": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 100
+          },
+          "workspaceRoots": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "maxConcurrentSessions": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "daemonVersion": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "machineName",
+          "environmentType",
+          "capabilities",
+          "workspaceRoots",
+          "maxConcurrentSessions",
+          "daemonVersion"
+        ],
+        "additionalProperties": false
+      },
+      "DaemonEventRequest": {
+        "type": "object",
+        "properties": {
+          "daemonId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "eventId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sequence": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "eventType": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "eventId",
+          "sequence",
+          "eventType",
+          "payload"
+        ],
+        "additionalProperties": false,
+        "description": "daemonId 可省略，提供时须匹配路径；(daemonId,eventId) 重复返回 created=false，当前不比较重复事件正文，也不要求 sequence 连续。"
+      },
+      "Artifact": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "source-diff",
+              "test-report",
+              "review",
+              "release-package",
+              "decision-record"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "approved",
+              "archived"
+            ]
+          },
+          "sourceArtifacts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50
+          },
+          "createdBy": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "agent",
+                  "daemon",
+                  "system"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "additionalProperties": true,
+            "x-unknown-fields": "stripped"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reviewState": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "changes_requested"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "artifactId",
+          "projectId",
+          "taskId",
+          "type",
+          "version",
+          "schemaVersion",
+          "uri",
+          "checksum",
+          "status",
+          "sourceArtifacts",
+          "createdBy",
+          "createdAt",
+          "reviewState"
+        ],
+        "additionalProperties": true,
+        "x-unknown-fields": "stripped"
+      },
+      "EventEnvelope": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "eventType": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payloadVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "sequence": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "traceId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payload": {}
+        },
+        "required": [
+          "eventId",
+          "eventType",
+          "payloadVersion",
+          "sequence",
+          "traceId",
+          "projectId",
+          "actor",
+          "occurredAt",
+          "payload"
+        ],
+        "additionalProperties": true,
+        "x-unknown-fields": "stripped"
+      },
+      "Actor": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "agent",
+              "daemon",
+              "system"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "starting",
+          "running",
+          "waiting_input",
+          "paused",
+          "reconnecting",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "goal",
+          "createdAt",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "projectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "title": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "implement",
+              "verify",
+              "review",
+              "delivered"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "blocked",
+              "paused",
+              "cancelled",
+              "failed",
+              "completed"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "title",
+          "goal",
+          "acceptanceCriteria",
+          "priority",
+          "stage",
+          "status",
+          "version",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          },
+          "entryAgent": {
+            "type": "string",
+            "const": "project-manager"
+          },
+          "planHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "taskId",
+          "status",
+          "entryAgent",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "attempt": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          },
+          "checkpointId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "attempt",
+          "status",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactCreateRequest": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "source-diff",
+              "test-report",
+              "review",
+              "release-package",
+              "decision-record"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "sourceArtifacts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "sessionId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ],
+        "additionalProperties": false,
+        "description": "sourceArtifacts 必须唯一且全部属于同一 Task，sessionId 必须属于该 Task。content 上限为字符数；服务端 HTTP body 上限独立生效。"
+      },
+      "StageRequest": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "implement"
+            ]
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "stage",
+          "expectedVersion"
+        ],
+        "additionalProperties": false,
+        "description": "仅允许相邻 QRSPI 阶段推进；要求 active Task、expectedVersion 匹配，以及每个准备阶段最新版本 Artifact 的批准与来源链。"
+      },
+      "DaemonHeartbeatRequest": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "daemonId": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "正文可省略；daemonId 若提供须等于路径 daemonId。sequence 与 occurredAt 当前仅校验，不用于心跳去重，服务端采用收到时间。"
+      },
+      "ClaimRequest": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "FailRequest": {
+        "type": "object",
+        "properties": {
+          "errorCode": {
+            "default": "TOOL_EXECUTION_FAILED",
+            "description": "无运行时类型校验；调用者应使用字符串。null 同缺省值。"
+          }
+        },
+        "required": [],
+        "additionalProperties": true,
+        "description": "仅用于无 execution_job 的 Run；errorCode 无 Zod 运行时校验，按字符串使用，缺省或 null 时使用 TOOL_EXECUTION_FAILED。"
+      },
+      "RunDispatch": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "projectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "goal": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "config": {
+            "$ref": "#/components/schemas/ExecutionConfig"
+          },
+          "claimToken": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "checkpoint": {
+            "$ref": "#/components/schemas/ExecutionCheckpoint"
+          }
+        },
+        "required": [
+          "jobId",
+          "runId",
+          "sessionId",
+          "taskId",
+          "projectId",
+          "goal",
+          "planHash",
+          "config",
+          "claimToken"
+        ],
+        "additionalProperties": false
+      },
+      "ProgressAck": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted",
+          "status",
+          "cancelRequested"
+        ],
+        "additionalProperties": false
+      },
+      "RunControl": {
+        "type": "object",
+        "properties": {
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          }
+        },
+        "required": [
+          "cancelRequested",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionJob": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "claimed",
+              "blocked",
+              "paused",
+              "completed",
+              "failed",
+              "cancelled",
+              "waiting_input"
+            ]
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "lastSequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "leaseExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "jobId",
+          "runId",
+          "status",
+          "cancelRequested",
+          "lastSequence",
+          "leaseExpiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "DaemonView": {
+        "type": "object",
+        "properties": {
+          "daemonId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "machineName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "workspaceRoots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxConcurrentSessions": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "daemonVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "registered",
+              "connecting",
+              "ready",
+              "draining",
+              "reconnecting",
+              "disconnected",
+              "revoked"
+            ]
+          },
+          "lastHeartbeatAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "daemonId",
+          "machineName",
+          "environmentType",
+          "capabilities",
+          "workspaceRoots",
+          "maxConcurrentSessions",
+          "daemonVersion",
+          "status",
+          "lastHeartbeatAt"
+        ],
+        "additionalProperties": true
+      },
+      "DaemonRegistrationResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DaemonView"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "authToken": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "注册返回一次的 Daemon 认证令牌；后续使用 Authorization Bearer。禁止记录到普通日志或快照。"
+              }
+            },
+            "required": [
+              "authToken"
+            ],
+            "additionalProperties": true
+          }
+        ]
+      },
+      "DaemonEventAck": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "created"
+        ],
+        "additionalProperties": false
+      },
+      "DaemonStoredEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sequence": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "eventType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload": {},
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "sequence",
+          "eventType",
+          "payload",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_FAILED",
+              "RESOURCE_NOT_FOUND",
+              "VERSION_CONFLICT",
+              "IDEMPOTENCY_CONFLICT",
+              "INVALID_STATE_TRANSITION",
+              "TASK_PLAN_REQUIRED",
+              "PLAN_HASH_STALE",
+              "PERMISSION_DENIED",
+              "APPROVAL_REQUIRED",
+              "TOOL_INPUT_INVALID",
+              "TOOL_BLOCKED_BY_HOOK",
+              "TOOL_EXECUTION_FAILED",
+              "TOOL_TIMEOUT",
+              "DAEMON_UNAVAILABLE",
+              "WORKSPACE_CONFLICT",
+              "CHECKPOINT_NOT_FOUND",
+              "RUNTIME_ADAPTER_UNAVAILABLE",
+              "EVENT_SEQUENCE_GAP",
+              "EXECUTION_LEASE_EXPIRED",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details",
+          "traceId",
+          "retryable",
+          "occurredAt"
+        ],
+        "additionalProperties": false
+      },
+      "StreamError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "EVENT_SEQUENCE_GAP",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

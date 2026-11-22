@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package titan.snapshot.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 只冻结代码快照与 Handoff 格式。Phase 1 不提供迁移服务、上传接口、
+// Patch 应用器、云端目标 Session 或自动凭证传递。
+message SnapshotActor {
+  string type = 1;
+  string id = 2;
+}
+
+message SnapshotFile {
+  // 仓库相对 POSIX 路径；拒绝绝对路径、反斜杠、..、符号链接逃逸。
+  string path = 1;
+  // added / modified / deleted / renamed / untracked。
+  string change = 2;
+  // 非 deleted 项必须为最终文件内容的 sha256:<64 小写十六进制>。
+  optional string checksum = 3;
+  uint64 size_bytes = 4;
+  // renamed 必填，同样须为安全仓库相对路径。
+  optional string previous_path = 5;
+  // untracked 或独立二进制文件内容引用，不能内嵌明文凭证。
+  optional string content_uri = 6;
+}
+
+message WorkspaceSnapshot {
+  // 固定 1；不支持的主版本必须拒绝。
+  uint32 schema_version = 1;
+  // 规范化仓库定位符或本机授权路径；禁止 userinfo、访问令牌或签名查询。
+  string repo = 2;
+  // 完整 Git commit object id；接收方必须先验证归属与可获取性。
+  string base_revision = 3;
+  optional string branch_name = 4;
+  // Git binary patch 的受控工件引用；哈希基于未经转码的 Patch 原始字节。
+  string patch_uri = 5;
+  string patch_sha = 6;
+  // 包括工作区允许同步的变更文件；与 Patch 和 content_uri 必须一致。
+  repeated SnapshotFile file_list = 7;
+  // 显式排除列表只能增加限制，不得移除文档规定的最小排除项。
+  repeated string excludes = 8;
+}
+
+message HandoffSnapshot {
+  uint32 schema_version = 1;
+  string snapshot_id = 2;
+  string project_id = 3;
+  string task_id = 4;
+  string source_session_id = 5;
+  string source_run_id = 6;
+  // 只引用已脱敏且归属于 source_session_id 的持久检查点。
+  string source_checkpoint_id = 7;
+  // local / cloud；目标将创建新 Session，不复用源 Session 标识。
+  string target_environment = 8;
+  string plan_hash = 9;
+  WorkspaceSnapshot workspace = 10;
+  // 源 Run 已确认持久化的 EventEnvelope.sequence；不得使用 progress.sequence。
+  uint64 last_event_sequence = 11;
+  google.protobuf.Timestamp created_at = 12;
+  SnapshotActor created_by = 13;
+  repeated string source_artifact_ids = 14;
+  // 目标需要重新授权工具、Daemon 和凭证，不在快照中携带可执行授权。
+}

@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package titan.daemon.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// 仅冻结 ConnectRPC 服务边界。Phase 1 真实传输为 OpenAPI 中的 HTTP/JSON，
+// 尚未部署此服务、生成客户端或进行 HTTP 自动转码。
+// 除 Register 外，认证令牌仅放在 authorization Bearer 元数据中，绑定 daemon_id。
+// 禁止在任何消息中放置模型 API Key、密码、密钥文件或任意认证配置对象。
+service DaemonGateway {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  rpc Progress(ProgressRequest) returns (ProgressResponse);
+  rpc Control(ControlRequest) returns (ControlResponse);
+}
+
+message DaemonRegistration {
+  string machine_name = 1;
+  // local / cloud；Phase 1 只执行 local，cloud 仅保留能力声明。
+  string environment_type = 2;
+  repeated string capabilities = 3;
+  repeated string workspace_roots = 4;
+  uint32 max_concurrent_sessions = 5;
+  string daemon_version = 6;
+}
+
+message DaemonView {
+  string daemon_id = 1;
+  string machine_name = 2;
+  string environment_type = 3;
+  repeated string capabilities = 4;
+  repeated string workspace_roots = 5;
+  uint32 max_concurrent_sessions = 6;
+  string daemon_version = 7;
+  string status = 8;
+  google.protobuf.Timestamp last_heartbeat_at = 9;
+}
+
+message RegisterRequest {
+  DaemonRegistration registration = 1;
+}
+
+message RegisterResponse {
+  DaemonView daemon = 1;
+  // 唯一允许返回的注册令牌；服务端只存哈希，客户端存本机私有状态。
+  // 不是模型凭证，不能进入日志、EventEnvelope 或 HandoffSnapshot。
+  string auth_token = 2;
+}
+
+message HeartbeatRequest {
+  string daemon_id = 1;
+  optional uint64 sequence = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+}
+
+message HeartbeatResponse {
+  DaemonView daemon = 1;
+}
+
+message ClaimRequest {
+  string daemon_id = 1;
+}
+
+message ClaimResponse {
+  // 无可用任务时 absent；对应 HTTP claim 的 204，而不是空 RunDispatch。
+  RunDispatch dispatch = 1;
+}
+
+message ExecutionConfig {
+  string daemon_id = 1;
+  // codex / qwen，必须在 Daemon capabilities 中。
+  string runtime = 2;
+  // 只存本机引用。凭证由本机安全存储解析，不随协议传输。
+  string credential_ref = 3;
+  optional string model_ref = 4;
+  string workspace_path = 5;
+  repeated string allowed_tools = 6;
+  // 1..10000。
+  uint32 max_turns = 7;
+  // 1..86400000 毫秒。
+  uint32 timeout_ms = 8;
+}
+
+message RunDispatch {
+  string job_id = 1;
+  string run_id = 2;
+  string session_id = 3;
+  string task_id = 4;
+  string project_id = 5;
+  string goal = 6;
+  string plan_hash = 7;
+  ExecutionConfig config = 8;
+  // 绑定 execution_job 的领取租约证明；不得写入公共事件或快照。
+  string claim_token = 9;
+  ExecutionCheckpoint checkpoint = 10;
+}
+
+message CheckpointMessage {
+  // user / assistant / tool。
+  string role = 1;
+  string text = 2;
+}
+
+message SuccessfulTool {
+  string id = 1;
+  string name = 2;
+  string input_hash = 3;
+  // 必须有 presence，显式 null 合法；不能把缺失当成已成功执行。
+  google.protobuf.Value output = 4;
+}
+
+message Evidence {
+  string kind = 1;
+  string reference = 2;
+}
+
+message ExecutionCheckpoint {
+  string id = 1;
+  repeated CheckpointMessage messages = 2;
+  repeated SuccessfulTool successful_tools = 3;
+  repeated Evidence evidence = 4;
+}
+
+message RunProgress {
+  string event_id = 1;
+  // 单个 execution_job 从 1 连续递增；HTTP 映射必须 <= 2^53-1。
+  uint64 sequence = 2;
+  string claim_token = 3;
+  // running / output / checkpoint / completed / failed / cancelled / waiting_input。
+  string type = 4;
+  google.protobuf.Struct payload = 5;
+  // type=checkpoint 时必须提供；其他类型也可携带检查点。
+  ExecutionCheckpoint checkpoint = 6;
+}
+
+message ProgressRequest {
+  string daemon_id = 1;
+  string run_id = 2;
+  RunProgress progress = 3;
+}
+
+message ProgressResponse {
+  bool accepted = 1;
+  string status = 2;
+  bool cancel_requested = 3;
+}
+
+message ControlRequest {
+  string daemon_id = 1;
+  string run_id = 2;
+}
+
+message ControlResponse {
+  bool cancel_requested = 1;
+  string status = 2;
+  // 没有 pause/resume 控制字段。此类功能仅预留，不能据此声称已实现。
+}
+
+message Actor {
+  // user / agent / daemon / system。
+  string type = 1;
+  string id = 2;
+}
+
+message EventEnvelope {
+  string event_id = 1;
+  string event_type = 2;
+  uint32 payload_version = 3;
+  // Run/Task/Project 各自作用域内的持久事件序号，区别于 progress.sequence。
+  uint64 sequence = 4;
+  string trace_id = 5;
+  string project_id = 6;
+  optional string task_id = 7;
+  optional string session_id = 8;
+  optional string run_id = 9;
+  Actor actor = 10;
+  google.protobuf.Timestamp occurred_at = 11;
+  google.protobuf.Value payload = 12;
+}
+
+// 错误语义参考；尚未实现 Connect 状态码映射或错误详情适配器。
+message ApiError {
+  string code = 1;
+  string message = 2;
+  google.protobuf.Struct details = 3;
+  string trace_id = 4;
+  bool retryable = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
