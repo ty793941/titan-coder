@@ -16,9 +16,11 @@ export class ApiClient {
   constructor(private readonly baseUrl = process.env.TITAN_API_URL ?? 'http://127.0.0.1:3000') {}
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const daemonToken = path.startsWith('/api/daemons/') && path !== '/api/daemons/register' ? process.env.TITAN_DAEMON_TOKEN : undefined;
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+      redirect: 'error',
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}), ...(init.headers ?? {}) },
     });
     const text = response.status === 204 ? '' : await response.text();
     let body: T | undefined;

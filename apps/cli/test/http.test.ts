@@ -22,6 +22,22 @@ async function serve(handler: (request: IncomingMessage, response: ServerRespons
 }
 
 describe('CLI HTTP contract', () => {
+  it('uses the local daemon token for authenticated daemon requests without printing it', async () => {
+    const previous = process.env.TITAN_DAEMON_TOKEN;
+    process.env.TITAN_DAEMON_TOKEN = 'test-device-token';
+    const seen: Array<string | undefined> = [];
+    const base = await serve((req, res) => { seen.push(req.headers.authorization); res.end('{"status":"ready"}'); });
+    try {
+      const result = await runCli(['daemon', 'heartbeat', 'daemon_1', '--base-url', base, '--json']);
+      await runCli(['task', 'get', 'task_1', '--base-url', base]);
+      expect(seen).toEqual(['Bearer test-device-token', undefined]);
+      expect(result.stdout).not.toContain('test-device-token');
+    } finally {
+      if (previous === undefined) delete process.env.TITAN_DAEMON_TOKEN;
+      else process.env.TITAN_DAEMON_TOKEN = previous;
+    }
+  });
+
   it('posts tasks to the task collection and preserves kebab-case idempotency flags', async () => {
     let observed: unknown;
     const base = await serve(async (req, res) => {

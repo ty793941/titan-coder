@@ -22,6 +22,7 @@ export type DaemonRunnerOptions = {
   runnerCommand?: string;
   runnerArgs?: string[];
   credentialEnv?: string[];
+  localPolicy?: { enabledSkills?: string[]; trustedCode?: boolean };
   pollIntervalMs?: number;
   heartbeatIntervalMs?: number;
   retryMaxMs?: number;
@@ -58,6 +59,8 @@ export class DaemonRunner {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 86_400_000)) throw new Error('INVALID_DAEMON_INTERVAL');
     }
     if (options.allowRuntime?.some(runtime => runtime !== 'codex' && runtime !== 'qwen')) throw new Error('INVALID_RUNTIME_ALLOWLIST');
+    if (options.localPolicy && ((options.localPolicy.trustedCode !== undefined && typeof options.localPolicy.trustedCode !== 'boolean') ||
+        options.localPolicy.enabledSkills?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9._-]{1,200}$/.test(id)))) throw new Error('INVALID_LOCAL_POLICY');
     this.client = new DaemonClient(options.baseUrl, options.requestTimeoutMs);
     this.workspace = new WorkspaceManager(options.workspaceRoots);
   }
@@ -191,6 +194,7 @@ export class DaemonRunner {
         daemonId: config.daemonId, runtime: config.runtime, credentialRef: config.credentialRef,
         workspacePath: resolve(workspacePath), allowedTools: [...config.allowedTools], maxTurns: config.maxTurns, timeoutMs: config.timeoutMs,
         ...(config.modelRef === undefined ? {} : { modelRef: config.modelRef }),
+        ...(this.options.localPolicy ? { localPolicy: structuredClone(this.options.localPolicy) } : {}),
       },
     };
     if (input.checkpoint) dispatch.checkpoint = sanitizeProgress({ eventId: 'validation', sequence: 1, claimToken: input.claimToken, type: 'checkpoint', payload: {}, checkpoint: input.checkpoint }).checkpoint!;

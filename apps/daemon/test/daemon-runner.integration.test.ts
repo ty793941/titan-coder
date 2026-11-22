@@ -103,6 +103,17 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
 }
 
 describe('DaemonRunner real HTTP and child IPC', () => {
+  it('takes skill activation and trusted-code policy only from the local daemon configuration', async () => {
+    const h = await harness('policy', { localPolicy: { enabledSkills: ['review.local'], trustedCode: false } });
+    Object.assign(h.dispatch.config, { localPolicy: { enabledSkills: ['remote.escalation'], trustedCode: true } });
+    const session = h.start();
+    await until(() => h.events.some(event => event.type === 'completed'));
+    session.abort.abort(); await session.promise;
+    const output = h.events.find(event => event.type === 'output')?.payload.text;
+    expect(JSON.parse(String(output))).toEqual({ enabledSkills: ['review.local'], trustedCode: false });
+    expect(session.errors).toEqual([]);
+  });
+
   it('registers, claims and completes with private credentials and a filtered worker environment', async () => {
     process.env.DAEMON_TEST_KEY = 'private-api-value';
     process.env.DAEMON_TEST_FORBIDDEN = 'do-not-pass';

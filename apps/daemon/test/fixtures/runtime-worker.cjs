@@ -34,7 +34,7 @@ process.on('message', message => {
     return;
   }
   progress('output', {
-    text: `worker:${process.env.DAEMON_TEST_KEY || 'missing'}:${process.env.DAEMON_TEST_FORBIDDEN || 'filtered'}`,
+    text: global.dispatch.goal === 'policy' ? JSON.stringify(global.dispatch.config.localPolicy) : `worker:${process.env.DAEMON_TEST_KEY || 'missing'}:${process.env.DAEMON_TEST_FORBIDDEN || 'filtered'}`,
     apiKey: 'should-not-be-durable',
   });
   timer = setTimeout(() => {

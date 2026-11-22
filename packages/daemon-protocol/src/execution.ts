@@ -7,6 +7,7 @@ export type ExecutionConfig = {
   allowedTools: string[];
   maxTurns: number;
   timeoutMs: number;
+  localPolicy?: { enabledSkills?: string[]; trustedCode?: boolean };
 };
 
 export type ExecutionCheckpoint = {
