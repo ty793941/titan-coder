@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ApiClient, type ApiError } from './client.js';
 import { createTask, getTask } from './commands/task.js';
-import { cancelRun, createRun, followRunEvents, getRun, getRunEvents, type FollowOptions } from './commands/run.js';
+import { cancelRun, createRun, followRunEvents, getRun, getRunEvents, pauseRun, resumeRun, type FollowOptions } from './commands/run.js';
 import { createSession, getSession } from './commands/session.js';
 import { getDaemon, heartbeatDaemon, registerDaemon, revokeDaemon } from './commands/daemon.js';
 
@@ -17,6 +17,8 @@ const help = `Usage: platform <command> [options]
   session get <sessionId>
   run create <sessionId> [--idempotency-key <key>]
   run get <runId>
+  run pause <runId>
+  run resume <runId> [--idempotency-key <key>] [--plan-hash <hash>] [--checkpoint-id <id>]
   run cancel <runId>
   run events <runId> [--last-event-id <sequence>] [--follow]
   daemon register [--machine <name>] [--workspace-root <path>] [--capabilities <csv>]
@@ -46,6 +48,8 @@ export async function runCli(argv: string[], options: FollowOptions = {}): Promi
       case 'session get': result = await getSession(client, id()); break;
       case 'run create': result = await createRun(client, id(), args); break;
       case 'run get': result = await getRun(client, id()); break;
+      case 'run pause': result = await pauseRun(client, id()); break;
+      case 'run resume': result = await resumeRun(client, id(), args); break;
       case 'run cancel': result = await cancelRun(client, id()); break;
       case 'run events':
         if (argv.includes('--follow')) {

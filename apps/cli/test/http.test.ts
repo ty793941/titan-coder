@@ -69,6 +69,8 @@ describe('CLI HTTP contract', () => {
     [['task', 'get', 'task_1'], 'GET', '/api/tasks/task_1'],
     [['session', 'get', 'session_1'], 'GET', '/api/sessions/session_1'],
     [['run', 'create', 'session_1', '--idempotency-key', 'run-key'], 'POST', '/api/sessions/session_1/runs'],
+    [['run', 'pause', 'run_1'], 'POST', '/api/runs/run_1/pause'],
+    [['run', 'resume', 'run_1', '--idempotency-key', 'resume-key'], 'POST', '/api/runs/run_1/resume'],
     [['run', 'cancel', 'run_1'], 'POST', '/api/runs/run_1/cancel'],
     [['daemon', 'heartbeat', 'daemon_1'], 'POST', '/api/daemons/daemon_1/heartbeat'],
   ])('sends %j to the existing API', async (args, method, path) => {
@@ -84,6 +86,7 @@ describe('CLI HTTP contract', () => {
     expect(result.exitCode).toBe(0);
     expect(seen).toMatchObject({ method, path });
     if (args[1] === 'create') expect(seen).toMatchObject({ body: '{"idempotencyKey":"run-key"}', key: 'run-key' });
+    if (args[1] === 'resume') expect(seen).toMatchObject({ body: '{"idempotencyKey":"resume-key"}', key: 'resume-key' });
     expect(typeof result.stdout).toBe('string');
   });
 

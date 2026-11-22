@@ -146,13 +146,14 @@ export class ExecutionService {
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirstOrThrow();
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id')
         .select(['task.project_id', 'task.id as task_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
-      const ack = (accepted: boolean): ProgressAck => ({ accepted, status: run.status, cancelRequested: job.cancel_requested });
+      const ack = (accepted: boolean): ProgressAck => ({ accepted, status: run.status, cancelRequested: job.cancel_requested || run.status === 'paused' });
       await sql`select pg_advisory_xact_lock(hashtextextended(${`progress:${input.eventId}`}, 0))`.execute(trx);
       const previous = await trx.selectFrom('execution_progress').selectAll().where('event_id', '=', input.eventId).executeTakeFirst();
       if (previous) {
         if (previous.job_id !== job.id || previous.request_hash !== requestHash) throw new DomainError('IDEMPOTENCY_CONFLICT', 'eventId was reused with different progress');
         return ack(false);
       }
+      if (run.status === 'paused') return { accepted: false, status: 'paused', cancelRequested: true };
       if (terminal.has(run.status)) return ack(false);
       if (!job.lease_expires_at || job.lease_expires_at.getTime() <= Date.now() || job.status !== 'claimed') throw new DomainError('PERMISSION_DENIED', 'claim lease expired');
       if (input.sequence !== Number(job.last_sequence) + 1) throw new DomainError('EVENT_SEQUENCE_GAP', 'progress sequence must be contiguous');
@@ -210,7 +211,7 @@ export class ExecutionService {
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id')
         .select(['session.id as session_id', 'task.id as task_id', 'task.project_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
       const status = run.checkpoint_id ? 'paused' : 'waiting_input';
-      await trx.updateTable('execution_job').set({ status: 'blocked', claim_token_hash: null, lease_expires_at: null }).where('id', '=', job.id).execute();
+      await trx.updateTable('execution_job').set({ status: 'blocked', cancel_requested: true, claim_token_hash: null, lease_expires_at: null }).where('id', '=', job.id).execute();
       await trx.updateTable('run').set({ status, error_code: 'EXECUTION_LEASE_EXPIRED', version: run.version + 1 }).where('id', '=', run.id).execute();
       await trx.updateTable('session').set(eb => ({ status, version: eb('version', '+', 1) })).where('id', '=', run.session_id).execute();
       await this.events.append(trx, {
@@ -300,7 +301,7 @@ export class ExecutionService {
       if (daemonStatus(daemon) === 'ready' && row.job_status === 'claimed' && row.lease_expires_at && row.lease_expires_at.getTime() > now.getTime()) {
         await trx.updateTable('execution_job').set({ lease_expires_at: new Date(now.getTime() + leaseMs) }).where('id', '=', row.id).execute();
       }
-      return { cancelRequested: row.cancel_requested, status: row.status };
+      return { cancelRequested: row.cancel_requested || row.status === 'paused', status: row.status };
     });
   }
 
@@ -308,6 +309,6 @@ export class ExecutionService {
     const row = await this.database.db.selectFrom('execution_job').select(['id', 'run_id', 'status', 'cancel_requested', 'last_sequence', 'lease_expires_at'])
       .where('daemon_id', '=', daemonId).where('run_id', '=', runId).executeTakeFirst();
     if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'execution job was not found');
-    return { jobId: row.id, runId: row.run_id, status: row.status, cancelRequested: row.cancel_requested, lastSequence: Number(row.last_sequence), leaseExpiresAt: row.lease_expires_at?.toISOString() ?? null };
+    return { jobId: row.id, runId: row.run_id, status: row.status, cancelRequested: row.cancel_requested || row.status === 'paused', lastSequence: Number(row.last_sequence), leaseExpiresAt: row.lease_expires_at?.toISOString() ?? null };
   }
 }

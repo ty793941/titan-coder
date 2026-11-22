@@ -16,6 +16,22 @@ export function cancelRun(client: ApiClient, runId: string): Promise<void> {
   return client.request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' });
 }
 
+export function pauseRun(client: ApiClient, runId: string): Promise<unknown> {
+  return client.request(`/api/runs/${encodeURIComponent(runId)}/pause`, { method: 'POST' });
+}
+
+export function resumeRun(client: ApiClient, runId: string, args: Record<string, string>): Promise<unknown> {
+  const idempotencyKey = args.idempotencyKey ?? `cli-resume-${crypto.randomUUID()}`;
+  const body = {
+    idempotencyKey,
+    ...(args.planHash ? { planHash: args.planHash } : {}),
+    ...(args.checkpointId ? { checkpointId: args.checkpointId } : {}),
+  };
+  return client.request(`/api/runs/${encodeURIComponent(runId)}/resume`, {
+    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body),
+  });
+}
+
 export async function getRunEvents(client: ApiClient, runId: string, lastEventId?: string): Promise<unknown[]> {
   const events = await client.stream(`/api/runs/${encodeURIComponent(runId)}/events`, lastEventId);
   return events.map(decodeEvent);

@@ -19,6 +19,21 @@ export class RunsController {
     return this.runs.get(runId);
   }
 
+  @Post('/runs/:runId/pause')
+  @HttpCode(200)
+  pause(@Param('runId') runId: string) {
+    return this.runs.pause(runId);
+  }
+
+  @Post('/runs/:runId/resume')
+  resume(
+    @Param('runId') runId: string,
+    @Body() body: unknown,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runs.resume(runId, body, idempotencyKey);
+  }
+
   @Post('/runs/:runId/fail')
   @HttpCode(204)
   async fail(@Param('runId') runId: string, @Body() body: { errorCode?: string }) {
