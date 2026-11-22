@@ -15,10 +15,11 @@ const GIT_TIMEOUT_MS = 30_000;
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const GIT_CONFIG_ARGS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.attributesFile=/dev/null'];
+const DIFF_OUTPUT_ARGS = ['--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--no-relative', '--output-indicator-new=+', '--output-indicator-old=-', '--output-indicator-context= '];
 const PROTECTED_DIRECTORIES = new Set(['.git', '.titan', '.humanlayer', '.ssh', 'node_modules', 'dist', 'coverage', '.codegraph', 'logs', 'tmp', '.tmp', '.cache']);
 const MINIMUM_EXCLUDES = [
-  '.env*', '**/.env*', '.git/**', '**/.git/**', '.titan/**', '**/.titan/**', '.humanlayer/**', '**/.humanlayer/**',
-  '.ssh/**', '**/.ssh/**', 'node_modules/**', '**/node_modules/**', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
+  '.env*', '**/.env*', '.env.*/**', '**/.env.*/**', '.git/**', '**/.git/**', '.titan/**', '**/.titan/**', '.humanlayer/**', '**/.humanlayer/**',
+  '.ssh/**', '**/.ssh/**', 'credentials/**', '**/credentials/**', 'node_modules/**', '**/node_modules/**', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
 ];
 const SECRET_PATTERNS = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i,
@@ -86,6 +87,7 @@ type CurrentEntry = {
   mode: number;
   content?: Buffer;
   checksum?: string;
+  objectId?: string;
 };
 
 type DiffStatus = {
@@ -157,8 +159,8 @@ export async function exportGitEvidence(input: ExportChangesInput & { workspaceR
       }
       const oid = await hashObjectFromBuffer(worktreePath, content, environment);
       const currentEntry = { ...entry, content, sizeBytes: content.length, checksum: checksum(content) };
+      currentEntry.objectId = oid;
       currentEntries.set(path, currentEntry);
-      await updateIndex(worktreePath, environment, entry.mode, oid, path);
     }
 
     for (const [path, base] of baseline) {
@@ -184,16 +186,21 @@ export async function exportGitEvidence(input: ExportChangesInput & { workspaceR
         addExclusion(exclusions, path, 'secret-pattern');
         continue;
       }
-      await runGit(worktreePath, ['update-index', '--remove', '--', path], environment);
+      await runGit(worktreePath, ['update-index', '--force-remove', '--', path], environment);
+    }
+
+    for (const [path, entry] of currentEntries) {
+      if (!entry.objectId) throw conflict('current file object was not prepared');
+      await updateIndex(worktreePath, environment, entry.mode, entry.objectId, path);
     }
 
     const patch = await runGitBuffer(worktreePath, [
-      ...GIT_CONFIG_ARGS, 'diff', '--cached', '--binary', '--find-renames=50%', '--no-ext-diff', '--no-textconv', baseRevision, '--',
+      ...GIT_CONFIG_ARGS, 'diff', '--cached', '--binary', '--find-renames=50%', '--no-ext-diff', '--no-textconv', ...DIFF_OUTPUT_ARGS, baseRevision, '--',
     ], environment, MAX_PATCH_SIZE + 1);
     if (patch.length > MAX_PATCH_SIZE) throw conflict('patch exceeds maximum size');
     if (containsSecret(patch)) throw conflict('patch contains a secret pattern');
     const statuses = parseDiffStatuses(await runGitBuffer(worktreePath, [
-      ...GIT_CONFIG_ARGS, 'diff', '--cached', '--name-status', '-z', '--find-renames=50%', '--no-ext-diff', '--no-textconv', baseRevision, '--',
+      ...GIT_CONFIG_ARGS, 'diff', '--cached', '--name-status', '-z', '--find-renames=50%', '--no-ext-diff', '--no-textconv', ...DIFF_OUTPUT_ARGS, baseRevision, '--',
     ], environment));
     const fileList = buildFileList(statuses, baseline, currentEntries, sourceTrackedPaths);
     const snapshot: WorkspaceSnapshot = {
@@ -323,12 +330,13 @@ function parseTreeRecord(record: Buffer): { path: string; mode: number; type: st
   const type = header[1];
   const oid = header[2];
   if (!modeText || !type || !oid) return undefined;
-  return { path: record.subarray(tab + 1).toString('utf8'), mode: Number.parseInt(modeText, 8), type, oid };
+  return { path: record.subarray(tab + 1).toString('utf8'), mode: Number(modeText), type, oid };
 }
 
 function baselinePathExclusion(path: string, mode: number, type: string, sizeBytes: number): string | undefined {
   if (!isSafeRepoPath(path)) return 'unsafe-path';
   if (hasProtectedDirectory(path)) return 'protected-directory';
+  if (hasSensitiveDirectory(path)) return 'sensitive-directory';
   if (isSensitivePath(path)) return 'sensitive-filename';
   if (mode === 160000 || type === 'commit') return 'submodule';
   if (mode === 120000) return 'symlink';
@@ -339,6 +347,14 @@ function baselinePathExclusion(path: string, mode: number, type: string, sizeByt
 
 function hasProtectedDirectory(path: string): boolean {
   return path.split('/').some(segment => PROTECTED_DIRECTORIES.has(segment));
+}
+
+function hasSensitiveDirectory(path: string): boolean {
+  return path.split('/').slice(0, -1).some(segment => isSensitiveDirectoryName(segment));
+}
+
+function isSensitiveDirectoryName(name: string): boolean {
+  return isSensitivePath(name);
 }
 
 function parseGitPathList(output: Buffer): string[] {
@@ -367,6 +383,10 @@ async function walk(root: string, directory: string, prefix: string, result: Map
     if (scanState.entries > MAX_SCAN_FILES) throw conflict('worktree file count exceeds maximum');
     if (PROTECTED_DIRECTORIES.has(entry.name)) {
       addExclusion(exclusions, path, 'protected-directory');
+      continue;
+    }
+    if (isSensitiveDirectoryName(entry.name)) {
+      addExclusion(exclusions, path, 'sensitive-directory');
       continue;
     }
     if (submodules.has(path)) {

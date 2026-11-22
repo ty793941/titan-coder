@@ -187,6 +187,117 @@ describe('WorktreeManager.exportChanges', () => {
     await expect(access(join(root, 'filter-ran'))).rejects.toThrow();
   });
 
+  it('excludes sensitive parent directories before walking ignored files', async () => {
+    const fixture = await setupRepository();
+    const { manager, worktreePath, baseRevision, root } = fixture;
+    await writeFile(join(worktreePath, '.gitignore'), 'credentials/\n.env.local/\n');
+    await mkdir(join(worktreePath, 'credentials'));
+    await mkdir(join(worktreePath, '.env.local'));
+    await writeFile(join(worktreePath, 'credentials', 'session.json'), '{"token":"ignored-secret"}\n');
+    await writeFile(join(worktreePath, '.env.local', 'config.json'), '{"apiKey":"ignored-secret"}\n');
+
+    const bundle = await manager.exportChanges({ worktreePath, baseRevision, outputDirectory: join(root, 'bundles') });
+    const patch = await readFile(bundle.patchPath, 'utf8');
+    const excludedPaths = new Map(bundle.snapshot.excludedFiles.map(file => [file.path, file.reason]));
+    expect(patch).not.toContain('session.json');
+    expect(patch).not.toContain('config.json');
+    expect(excludedPaths.get('credentials')).toBe('sensitive-directory');
+    expect(excludedPaths.get('.env.local')).toBe('sensitive-directory');
+
+    const oldSensitiveFixture = await setupRepository();
+    await writeFile(join(oldSensitiveFixture.worktreePath, 'credentials'), 'old credential target\n');
+    await git(oldSensitiveFixture.worktreePath, ['add', '--', 'credentials']);
+    await git(oldSensitiveFixture.worktreePath, ['commit', '-qm', 'sensitive old file']);
+    const oldSensitiveBaseRevision = (await git(oldSensitiveFixture.worktreePath, ['rev-parse', 'HEAD'])).trim();
+    await rm(join(oldSensitiveFixture.worktreePath, 'credentials'));
+    await mkdir(join(oldSensitiveFixture.worktreePath, 'credentials'));
+    await writeFile(join(oldSensitiveFixture.worktreePath, 'credentials', 'session.json'), 'new credential target\n');
+    const oldSensitiveBundle = await oldSensitiveFixture.manager.exportChanges({ worktreePath: oldSensitiveFixture.worktreePath, baseRevision: oldSensitiveBaseRevision, outputDirectory: join(oldSensitiveFixture.root, 'bundles-old') });
+    expect(oldSensitiveBundle.snapshot.fileList.find(file => file.path === 'credentials')).toBeUndefined();
+    expect(await readFile(oldSensitiveBundle.patchPath, 'utf8')).not.toContain('credential target');
+  });
+
+  it('never exports a committed symlink deletion or replacement', async () => {
+    const fixture = await setupRepository();
+    const { manager, worktreePath, root } = fixture;
+    await symlink('tracked.txt', join(worktreePath, 'committed-link'));
+    await git(worktreePath, ['add', '--', 'committed-link']);
+    await git(worktreePath, ['commit', '-qm', 'commit symlink']);
+    const symlinkBaseRevision = (await git(worktreePath, ['rev-parse', 'HEAD'])).trim();
+
+    await rm(join(worktreePath, 'committed-link'));
+    const deletedBundle = await manager.exportChanges({ worktreePath, baseRevision: symlinkBaseRevision, outputDirectory: join(root, 'bundles-delete') });
+    expect(deletedBundle.snapshot.fileList.find(file => file.path === 'committed-link')).toBeUndefined();
+    expect(await readFile(deletedBundle.patchPath, 'utf8')).not.toContain('committed-link');
+
+    await writeFile(join(worktreePath, 'committed-link'), 'replacement must not ship\n');
+    const replacedBundle = await manager.exportChanges({ worktreePath, baseRevision: symlinkBaseRevision, outputDirectory: join(root, 'bundles-replace') });
+    expect(replacedBundle.snapshot.fileList.find(file => file.path === 'committed-link')).toBeUndefined();
+    expect(await readFile(replacedBundle.patchPath, 'utf8')).not.toContain('replacement must not ship');
+  });
+
+  it('normalizes host diff configuration so the patch keeps stable prefixes and applies', async () => {
+    const fixture = await setupRepository();
+    const { repositoryPath, manager, worktreePath, baseRevision, root } = fixture;
+    await writeFile(join(worktreePath, 'tracked.txt'), 'host config must not change patch\n');
+    for (const [key, value] of [['color.ui', 'always'], ['diff.noprefix', 'true'], ['diff.mnemonicPrefix', 'true'], ['diff.relative', 'true'], ['diff.renames', 'false']] as const) {
+      await git(repositoryPath, ['config', key, value]);
+    }
+
+    const bundle = await manager.exportChanges({ worktreePath, baseRevision, outputDirectory: join(root, 'bundles') });
+    const patch = await readFile(bundle.patchPath, 'utf8');
+    expect(patch).not.toMatch(/\u001b\[/);
+    expect(patch).toContain('diff --git a/tracked.txt b/tracked.txt');
+    expect(patch).toContain('--- a/tracked.txt');
+    expect(patch).toContain('+++ b/tracked.txt');
+
+    const applyRepository = join(root, 'apply-repository');
+    await git(root, ['clone', '-q', repositoryPath, applyRepository]);
+    await git(applyRepository, ['checkout', '-q', baseRevision]);
+    await git(applyRepository, ['apply', '--check', bundle.patchPath]);
+  });
+
+  it('handles file-directory transitions in both directions and an empty replacement directory', async () => {
+    const fileFixture = await setupRepository();
+    const filePath = join(fileFixture.worktreePath, 'config');
+    await writeFile(filePath, 'file before directory\n');
+    await git(fileFixture.worktreePath, ['add', '--', 'config']);
+    await git(fileFixture.worktreePath, ['commit', '-qm', 'config file']);
+    const fileBaseRevision = (await git(fileFixture.worktreePath, ['rev-parse', 'HEAD'])).trim();
+    await rm(filePath);
+    await mkdir(filePath);
+    await writeFile(join(filePath, 'index.ts'), 'directory after file\n');
+    const fileToDirectory = await fileFixture.manager.exportChanges({ worktreePath: fileFixture.worktreePath, baseRevision: fileBaseRevision, outputDirectory: join(fileFixture.root, 'bundles-file-to-directory') });
+    expect(fileToDirectory.snapshot.fileList).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'config', change: 'deleted' }),
+      expect.objectContaining({ path: 'config/index.ts', change: 'untracked' }),
+    ]));
+
+    const directoryFixture = await setupRepository();
+    await mkdir(join(directoryFixture.worktreePath, 'config'));
+    await writeFile(join(directoryFixture.worktreePath, 'config', 'index.ts'), 'directory before file\n');
+    await git(directoryFixture.worktreePath, ['add', '--', 'config/index.ts']);
+    await git(directoryFixture.worktreePath, ['commit', '-qm', 'config directory']);
+    const directoryBaseRevision = (await git(directoryFixture.worktreePath, ['rev-parse', 'HEAD'])).trim();
+    await rm(join(directoryFixture.worktreePath, 'config'), { recursive: true, force: true });
+    await writeFile(join(directoryFixture.worktreePath, 'config'), 'file after directory\n');
+    const directoryToFile = await directoryFixture.manager.exportChanges({ worktreePath: directoryFixture.worktreePath, baseRevision: directoryBaseRevision, outputDirectory: join(directoryFixture.root, 'bundles-directory-to-file') });
+    expect(directoryToFile.snapshot.fileList).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'config/index.ts', change: 'deleted' }),
+      expect.objectContaining({ path: 'config', change: 'untracked' }),
+    ]));
+
+    const emptyFixture = await setupRepository();
+    await writeFile(join(emptyFixture.worktreePath, 'emptydir'), 'tracked before empty directory\n');
+    await git(emptyFixture.worktreePath, ['add', '--', 'emptydir']);
+    await git(emptyFixture.worktreePath, ['commit', '-qm', 'empty directory transition']);
+    const emptyBaseRevision = (await git(emptyFixture.worktreePath, ['rev-parse', 'HEAD'])).trim();
+    await rm(join(emptyFixture.worktreePath, 'emptydir'));
+    await mkdir(join(emptyFixture.worktreePath, 'emptydir'));
+    const emptyBundle = await emptyFixture.manager.exportChanges({ worktreePath: emptyFixture.worktreePath, baseRevision: emptyBaseRevision, outputDirectory: join(emptyFixture.root, 'bundles-empty') });
+    expect(emptyBundle.snapshot.fileList).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'emptydir', change: 'deleted' })]));
+  });
+
   it('rejects nested, source-local, non-linked, and abbreviated worktree locations before creating output', async () => {
     const fixture = await setupRepository();
     const { manager, worktreePath, baseRevision, root, repositoryPath } = fixture;
