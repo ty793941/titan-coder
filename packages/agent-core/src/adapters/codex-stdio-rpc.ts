@@ -84,21 +84,15 @@ export class CodexStdioRpc {
         this.fail(providerError('Codex', 'session closed'));
         this.child.stdin.destroy();
         this.killGroup('SIGTERM');
-        let forced: ReturnType<typeof setTimeout> | undefined;
-        let bounded: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([
-            this.exited,
-            new Promise<void>(resolve => {
-              forced = setTimeout(() => {
-                this.killGroup('SIGKILL');
-                bounded = setTimeout(resolve, 500);
-              }, 250);
-            }),
-          ]);
+          // 父进程关闭不代表整个进程组已退出，保留强杀后代的宽限窗口。
+          await new Promise<void>(resolve => setTimeout(resolve, 250));
+          this.killGroup('SIGKILL');
+          let bounded: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([this.exited, new Promise<void>(resolve => { bounded = setTimeout(resolve, 500); })]);
+          } finally { clearTimeout(bounded); }
         } finally {
-          clearTimeout(forced);
-          clearTimeout(bounded);
           this.child.stdout.destroy();
           this.child.stderr.destroy();
         }

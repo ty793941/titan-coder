@@ -72,6 +72,39 @@ class FailedTestAdapter implements RuntimeAdapter {
 }
 
 describe('Runtime safety behavior', () => {
+  it.each([false, true])('blocks artifact completion until a failed test is retested successfully: %s', async retest => {
+    let turn = 0;
+    let tests = 0;
+    const adapter: RuntimeAdapter = {
+      async createSession() { return { id: 'mixed-evidence', runtime: 'qwen' }; },
+      async sendInput() { turn++; },
+      async *streamEvents() {
+        if (turn === 1) {
+          yield { type: 'tool.requested', payload: { id: 'artifact-mixed', name: 'artifact.write', arguments: {} } };
+          yield { type: 'tool.requested', payload: { id: 'test-failed', name: 'command.test', arguments: {} } };
+        } else if (turn === 2 && retest) yield { type: 'tool.requested', payload: { id: 'test-retested', name: 'command.test', arguments: {} } };
+        else yield { type: 'session.completed' };
+      },
+      async cancel() {}, async close() {}, async pause() { return { id: 'pause' }; }, async resume() {},
+    };
+    const registry = new ToolRegistry({ permission: new PermissionEngine([{ source: 'run', action: '*', resource: 'run-mixed', decision: 'allow' }]), hooks: new HookRunner([]) });
+    registry.register({ name: 'artifact.write', version: 1, input: z.object({}), execute: async () => ({ kind: 'artifact', reference: 'artifact://mixed' }) });
+    registry.register({ name: 'command.test', version: 1, input: z.object({}), execute: async () => ({ kind: 'test', reference: 'test://suite', status: ++tests === 1 ? 'failed' : 'passed' }) });
+    const loop = new AgentLoop({ adapter, tools: registry, checkpoints: new CheckpointStore(), goalGate: new GoalGate() });
+    const result = await loop.run({ runId: 'run-mixed', goal: 'artifact and tests', maxTurns: 4 });
+    expect(result.status).toBe(retest ? 'satisfied' : 'waiting_input');
+    if (!retest) expect(result.error).toContain('failed tests');
+  });
+
+  it('keeps escaped tool JSON within the checkpoint message limit', async () => {
+    const adapter = new TwoTurnAdapter();
+    const registry = new ToolRegistry({ permission: new PermissionEngine([{ source: 'run', action: '*', resource: 'run-long', decision: 'allow' }]), hooks: new HookRunner([]) });
+    registry.register({ name: 'artifact.write', version: 1, input: z.object({ path: z.string(), content: z.string() }), execute: async () => ({ text: '"\n'.repeat(16384) }) });
+    const result = await new AgentLoop({ adapter, tools: registry, checkpoints: new CheckpointStore(), goalGate: new GoalGate() }).run({ runId: 'run-long', goal: 'long read', maxTurns: 3 });
+    expect(result.checkpoint?.messages.every(message => message.text.length <= 32768)).toBe(true);
+    expect(result.checkpoint?.messages.find(message => message.role === 'tool')?.text).toContain('[truncated]');
+  });
+
   it('rechecks run permissions before returning a hydrated tool result', async () => {
     const registry = new ToolRegistry({ permission: new PermissionEngine([]), hooks: new HookRunner([]) });
     registry.register({ name: 'workspace.read', version: 1, input: z.object({ path: z.string() }), execute: async () => ({ text: 'private' }) });

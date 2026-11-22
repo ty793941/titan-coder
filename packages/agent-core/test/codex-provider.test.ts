@@ -74,8 +74,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode === 'rpc-error') return send({ method: 'turn/completed', params: { threadId: thread, turn: { id: current, status: 'failed', error: { message: 'secret-test-key' } } } });
     if (mode === 'approval') return send({ id: 'approval', method: 'item/commandExecution/requestApproval', params: { threadId: thread, turnId: current } });
     if (mode === 'tool' || mode === 'unknown-tool') return send({ id: 'tool', method: 'item/tool/call', params: { threadId: thread, turnId: current, callId: 'call-1', tool: mode === 'tool' ? 'lookup' : 'unregistered', arguments: { q: 'hello' } } });
-    const descendant = mode === 'descendant' ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }) : undefined;
-    const delta = mode === 'resources' ? JSON.stringify({ home: process.env.CODEX_HOME, pid: process.pid, args: process.argv, keyEnv: process.env.OPENAI_API_KEY }) : mode === 'descendant' ? JSON.stringify({ descendantPid: descendant.pid }) : p.input[0].text + ':' + p.model;
+    const descendant = mode === 'descendant' ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }) : mode === 'stubborn-descendant' ? spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'ignore' }) : undefined;
+    const delta = mode === 'resources' ? JSON.stringify({ home: process.env.CODEX_HOME, pid: process.pid, args: process.argv, keyEnv: process.env.OPENAI_API_KEY }) : descendant ? JSON.stringify({ descendantPid: descendant.pid }) : p.input[0].text + ':' + p.model;
     send({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId: current, delta } });
     send({ method: 'turn/completed', params: { threadId: thread, turn: { id: current, status: 'completed' } } });
     return;
@@ -224,13 +224,17 @@ describe('Codex App Server stdio provider', () => {
     await adapter.close(session);
   });
 
-  it('kills descendants in the Codex process group within the bounded close wait', async () => {
-    const { adapter, session } = await fixture('descendant');
+  it.each(['descendant', 'stubborn-descendant'])('kills %s in the Codex process group within the bounded close wait', async mode => {
+    const { adapter, session } = await fixture(mode);
     await adapter.sendInput(session, { text: 'descendant' });
     const events = await Array.fromAsync(adapter.streamEvents(session));
     const descendantPid = JSON.parse(events.find(event => event.type === 'text')!.payload as string).descendantPid as number;
-    await adapter.close(session);
-    expect(() => process.kill(descendantPid, 0)).toThrow();
+    try {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await adapter.close(session);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(() => process.kill(descendantPid, 0)).toThrow();
+    } finally { try { process.kill(descendantPid, 'SIGKILL'); } catch {} }
   });
 
   it.runIf(process.env.TITAN_CODEX_BINARY)('accepts ephemeral API-key login in the actual installed Codex without creating credential files', async () => {

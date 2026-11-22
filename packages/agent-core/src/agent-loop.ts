@@ -32,6 +32,11 @@ function asText(payload: unknown): string {
   return JSON.stringify(payload);
 }
 
+function checkpointText(text: string): string {
+  const suffix = '\n[truncated]';
+  return text.length <= 32768 ? text : `${text.slice(0, 32768 - suffix.length)}${suffix}`;
+}
+
 function extractEvidence(output: unknown): GoalEvidence[] {
   if (!output || typeof output !== 'object') return [];
   const value = output as { kind?: unknown; reference?: unknown; status?: unknown; evidence?: unknown };
@@ -75,6 +80,15 @@ export class AgentLoop {
     const messages: CheckpointMessage[] = input.checkpoint?.messages ? sanitizeSensitive([...input.checkpoint.messages], secrets) : [];
     const validTools = input.checkpoint ? await this.options.tools.hydrateVerified(input.checkpoint.successfulTools, input.workspacePath) : [];
     const evidence: GoalEvidence[] = validTools.flatMap(tool => extractEvidence(tool.output));
+    const failedTests = new Set<string>();
+    const observeTest = (output: unknown): void => {
+      if (!output || typeof output !== 'object') return;
+      const result = output as { kind?: string; reference?: string; status?: string };
+      if (result.kind !== 'test' || !result.reference) return;
+      if (result.status === 'passed') failedTests.delete(result.reference);
+      else failedTests.add(result.reference);
+    };
+    for (const tool of validTools) observeTest(tool.output);
     const replayedToolUseIds = validTools.map(tool => tool.id);
     let session: Awaited<ReturnType<RuntimeAdapter['createSession']>> | undefined;
     let latestCheckpoint: ExecutionCheckpoint | undefined;
@@ -96,7 +110,7 @@ export class AgentLoop {
       signal.addEventListener('abort', cancelOnAbort, { once: true });
       const recoveryCheckpoint = input.checkpoint ? { ...input.checkpoint, successfulTools: validTools, evidence } : undefined;
       const initialText = recoveryCheckpoint ? recoveryContext(recoveryCheckpoint, input.goal, secrets) : input.goal;
-      messages.push({ role: 'user', text: initialText });
+      messages.push({ role: 'user', text: checkpointText(initialText) });
       await this.options.adapter.sendInput(session, { text: initialText, signal });
       while (turn < maxTurns && !providerCompleted) {
         signal.throwIfAborted();
@@ -106,7 +120,7 @@ export class AgentLoop {
           signal.throwIfAborted();
           if (event.type === 'text') {
             const text = sanitizeSensitive(asText(event.payload), secrets);
-            messages.push({ role: 'assistant', text });
+            messages.push({ role: 'assistant', text: checkpointText(text) });
             await this.options.onProgress?.({ type: 'output', payload: { text } });
           } else if (event.type === 'tool.requested') {
             const request = toolInput((event.payload ?? {}) as ToolRequestPayload);
@@ -123,7 +137,8 @@ export class AgentLoop {
             };
             const result = await this.options.tools.execute({ toolUseId: request.id, name: request.name, input: request.input, context });
             const output = sanitizeSensitive(JSON.stringify(result.output), secrets);
-            messages.push({ role: 'tool', text: output });
+            messages.push({ role: 'tool', text: checkpointText(output) });
+            observeTest(result.output);
             evidence.push(...extractEvidence(result.output));
             const checkpoint = await this.options.checkpoints.save({ id: randomUUID(), messages: [...messages], successfulTools: this.options.tools.getSuccessfulResults(), evidence: [...evidence] });
             latestCheckpoint = checkpoint;
@@ -143,6 +158,7 @@ export class AgentLoop {
         }
       }
       if (!providerCompleted || pendingToolCalls.size > 0) return { status: 'failed', replayedToolUseIds, evidence, ...(latestCheckpoint ? { checkpoint: latestCheckpoint } : {}), error: 'provider did not complete before the run budget was exhausted' };
+      if (failedTests.size > 0) return { status: 'waiting_input', replayedToolUseIds, evidence, ...(latestCheckpoint ? { checkpoint: latestCheckpoint } : {}), error: 'unresolved failed tests require a successful retest' };
       const decision = this.options.goalGate.evaluate(evidence);
       if (decision.decision === 'satisfied') return { status: 'satisfied', replayedToolUseIds, evidence, ...(latestCheckpoint ? { checkpoint: latestCheckpoint } : {}) };
       return { status: 'waiting_input', replayedToolUseIds, evidence, ...(latestCheckpoint ? { checkpoint: latestCheckpoint } : {}), error: decision.reason };
