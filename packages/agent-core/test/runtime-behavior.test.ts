@@ -72,6 +72,25 @@ class FailedTestAdapter implements RuntimeAdapter {
 }
 
 describe('Runtime safety behavior', () => {
+  it('rechecks run permissions before returning a hydrated tool result', async () => {
+    const registry = new ToolRegistry({ permission: new PermissionEngine([]), hooks: new HookRunner([]) });
+    registry.register({ name: 'workspace.read', version: 1, input: z.object({ path: z.string() }), execute: async () => ({ text: 'private' }) });
+    registry.hydrate([{ id: 'cached-call', name: 'workspace.read', inputHash: hashToolInput({ path: 'a.txt' }), output: { text: 'private' } }]);
+    await expect(registry.execute({ toolUseId: 'cached-call', name: 'workspace.read', input: { path: 'a.txt' }, context: { runId: 'new-run', allowedTools: [] } })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  });
+
+  it('does not reuse a read result for a new call after workspace content changes', async () => {
+    let content = 'first';
+    const registry = new ToolRegistry({ permission: new PermissionEngine([{ source: 'run', action: 'workspace.read', resource: 'run-read', decision: 'allow' }]), hooks: new HookRunner([]) });
+    registry.register({ name: 'workspace.read', version: 1, input: z.object({ path: z.string() }), execute: async () => ({ text: content }) });
+    const base = { name: 'workspace.read', input: { path: 'a.txt' }, context: { runId: 'run-read' } };
+    await registry.execute({ ...base, toolUseId: 'read-first' });
+    content = 'changed';
+    const result = await registry.execute({ ...base, toolUseId: 'read-again' });
+    expect(result.output).toEqual({ text: 'changed' });
+    expect(result.replayed).toBe(false);
+  });
+
   it('does not treat a session completion event as goal evidence', () => {
     expect(new GoalGate().evaluate([{ kind: 'runtime', reference: 'session.completed' }]).decision).toBe('continue');
   });

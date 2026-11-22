@@ -58,12 +58,6 @@ export class ToolRegistry {
 
   async execute(request: ToolRequest): Promise<ToolResult> {
     const inputHash = hashToolInput(request.input);
-    const replay = this.results.get(request.toolUseId);
-    if (replay) {
-      if (replay.name !== request.name || replay.inputHash !== inputHash) throw new DomainError('TOOL_INPUT_INVALID', `tool ${request.toolUseId} input changed during replay`);
-      if (replay.uncertain) throw new DomainError('TOOL_EXECUTION_FAILED', `TOOL_EXECUTION_UNCERTAIN: tool ${request.toolUseId} cannot be replayed`);
-      return { ...replay, replayed: true };
-    }
     const manifest = this.tools.get(request.name);
     if (!manifest) throw new DomainError('TOOL_INPUT_INVALID', `tool ${request.name} is not registered`);
     if (request.context.allowedTools && !request.context.allowedTools.includes(request.name)) throw new DomainError('PERMISSION_DENIED', `tool ${request.name} is not allowed for this run`);
@@ -74,6 +68,12 @@ export class ToolRegistry {
       resource: request.context.runId,
       ...(request.context.approvalToken ? { approvalToken: request.context.approvalToken } : {}),
     });
+    const replay = this.results.get(request.toolUseId);
+    if (replay) {
+      if (replay.name !== request.name || replay.inputHash !== inputHash) throw new DomainError('TOOL_INPUT_INVALID', `tool ${request.toolUseId} input changed during replay`);
+      if (replay.uncertain) throw new DomainError('TOOL_EXECUTION_FAILED', `TOOL_EXECUTION_UNCERTAIN: tool ${request.toolUseId} cannot be replayed`);
+      return { ...replay, replayed: true };
+    }
     await this.options.onAudit?.({ source: 'tool', status: 'started', toolName: request.name, toolCallId: request.toolUseId, runId: request.context.runId, inputHash });
     const hookContext = {
       toolName: request.name,
@@ -89,16 +89,18 @@ export class ToolRegistry {
       throw new DomainError('TOOL_BLOCKED_BY_HOOK', `pre-tool hook blocked ${request.name}`);
     }
     const canonical = canonicalKey(request.name, inputHash);
-    let canonicalReplay = this.canonicalResults.get(canonical);
-    if (!canonicalReplay && this.options.ledger) {
-      const ledgerReplay = await this.options.ledger.begin({ toolCallId: request.toolUseId, toolName: request.name, inputHash });
+    const volatile = ['workspace.read', 'workspace.search', 'command.test'].includes(request.name);
+    const ledger = volatile ? undefined : this.options.ledger;
+    let canonicalReplay = volatile ? undefined : this.canonicalResults.get(canonical);
+    if (!canonicalReplay && ledger) {
+      const ledgerReplay = await ledger.begin({ toolCallId: request.toolUseId, toolName: request.name, inputHash });
       if (ledgerReplay) canonicalReplay = { toolUseId: request.toolUseId, name: request.name, inputHash, output: ledgerReplay.output, replayed: false };
     }
     if (canonicalReplay && request.name === 'artifact.write' && !(await verifyArtifact(canonicalReplay.output, request.context.workspacePath))) {
-      await this.options.ledger?.discard({ toolName: request.name, inputHash });
+      await ledger?.discard({ toolName: request.name, inputHash });
       this.canonicalResults.delete(canonical);
       canonicalReplay = undefined;
-      if (this.options.ledger) await this.options.ledger.begin({ toolCallId: request.toolUseId, toolName: request.name, inputHash });
+      if (ledger) await ledger.begin({ toolCallId: request.toolUseId, toolName: request.name, inputHash });
     }
     if (canonicalReplay) {
       if (canonicalReplay.uncertain) throw new DomainError('TOOL_EXECUTION_FAILED', `TOOL_EXECUTION_UNCERTAIN: tool ${request.name} cannot be replayed`);
@@ -112,7 +114,7 @@ export class ToolRegistry {
     try {
       output = await manifest.execute(parsed.data, request.context);
     } catch (error) {
-      await this.options.ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash }).catch(() => undefined);
+      await ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash }).catch(() => undefined);
       await this.options.onAudit?.({ source: 'tool', status: 'uncertain', toolName: request.name, toolCallId: request.toolUseId, runId: request.context.runId, inputHash, reason: String(error) });
       throw new DomainError('TOOL_EXECUTION_FAILED', `tool ${request.name} failed`, { cause: String(error) });
     }
@@ -123,23 +125,23 @@ export class ToolRegistry {
     } catch (error) {
       const uncertain = { ...result, uncertain: true };
       this.results.set(request.toolUseId, uncertain);
-      await this.options.ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
+      await ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
       await this.options.onAudit?.({ source: 'tool', status: 'uncertain', toolName: request.name, toolCallId: request.toolUseId, runId: request.context.runId, inputHash, reason: String(error) });
       throw error;
     }
     if (after === 'deny') {
       const uncertain = { ...result, uncertain: true };
       this.results.set(request.toolUseId, uncertain);
-      await this.options.ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
+      await ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
       await this.options.onAudit?.({ source: 'tool', status: 'uncertain', toolName: request.name, toolCallId: request.toolUseId, runId: request.context.runId, inputHash, reason: 'post-tool hook blocked' });
       throw new DomainError('TOOL_BLOCKED_BY_HOOK', `post-tool hook blocked ${request.name}`);
     }
     try {
-      await this.options.ledger?.success({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output });
+      await ledger?.success({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output });
     } catch (error) {
       const uncertain = { ...result, uncertain: true };
       this.results.set(request.toolUseId, uncertain);
-      await this.options.ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
+      await ledger?.uncertain({ toolCallId: request.toolUseId, toolName: request.name, inputHash, output }).catch(() => undefined);
       await this.options.onAudit?.({ source: 'tool', status: 'uncertain', toolName: request.name, toolCallId: request.toolUseId, runId: request.context.runId, inputHash, reason: String(error) });
       throw error;
     }
