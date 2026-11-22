@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { DomainError } from '@titan/contracts';
+import { exportGitEvidence, type ExportChangesInput, type GitEvidenceBundle } from './git-evidence.js';
 import { WorkspaceManager } from './workspace-manager.js';
 
 const execFile = promisify(execFileCallback);
@@ -46,6 +47,10 @@ export class WorktreeManager {
     } finally {
       await rmdir(lock);
     }
+  }
+
+  async exportChanges(input: ExportChangesInput): Promise<GitEvidenceBundle> {
+    return exportGitEvidence({ ...input, workspaceRoot: this.workspaceRoot });
   }
 
   private async git(cwd: string, args: string[]): Promise<string> {
