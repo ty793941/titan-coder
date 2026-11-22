@@ -30,7 +30,11 @@ export async function readArtifactContent(uri: string, checksum: string, roots: 
     const root = await realpath(scope.artifactRoot);
     if (root !== resolve(workspace, '.titan', 'artifacts')) throw new DomainError('PERMISSION_DENIED', 'artifact directory escapes its workspace');
     const canonicalPath = await realpath(path);
-    if (!within(root, canonicalPath)) throw new DomainError('PERMISSION_DENIED', 'artifact symlink escapes its artifact directory');
+    // 只规范化可信根目录的祖先别名，工件自身的相对路径必须保持固定归属。
+    const expectedCanonicalPath = resolve(root, relative(scope.artifactRoot, scope.expectedPath ?? path));
+    if (!within(root, canonicalPath) || canonicalPath !== expectedCanonicalPath) {
+      throw new DomainError('PERMISSION_DENIED', 'artifact symlink changes its expected file identity');
+    }
     const extension = extname(path).toLowerCase();
     const format = extension === '.md' || extension === '.markdown' ? 'markdown'
       : extension === '.json' ? 'json' : ['.txt', '.text', '.log'].includes(extension) ? 'text' : undefined;

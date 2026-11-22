@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp } from '../src/test-app.js';
 
@@ -71,6 +71,70 @@ describe('Artifact content boundary', () => {
     await writeFile(outside, 'outside secret');
     await symlink(outside, path);
     expect((await content(await register(path, 'outside secret')).expect(403)).body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it.each(['same-namespace', 'other-namespace'])('rejects a file symlink borrowing content from %s even with its checksum', async location => {
+    const targetDirectory = location === 'same-namespace' ? root : join(workspace, '.titan', 'artifacts', randomUUID());
+    await mkdir(targetDirectory, { recursive: true });
+    const target = join(targetDirectory, `target-${location}.md`);
+    const path = join(root, `alias-${location}.md`);
+    const value = 'another artifact content';
+    await writeFile(target, value);
+    await symlink(target, path);
+    const response = await content(await register(path, value)).expect(403);
+    expect(response.body.code).toBe('PERMISSION_DENIED');
+    expect(JSON.stringify(response.body)).not.toContain(value);
+  });
+
+  it('rejects a namespace directory symlink to another namespace in the same artifact root', async () => {
+    const aliasNamespace = randomUUID();
+    const aliasRoot = join(workspace, '.titan', 'artifacts', aliasNamespace);
+    const value = 'content owned by the other namespace';
+    await writeFile(join(root, 'namespace-target.md'), value);
+    await symlink(root, aliasRoot);
+    const id = await register(join(aliasRoot, 'namespace-target.md'), value);
+    await api.db.updateTable('artifact').set({ reference: `artifact://${aliasNamespace}/namespace-target.md` }).where('artifact_id', '=', id).execute();
+    expect((await content(id).expect(403)).body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('rejects a control-plane artifact symlink to another task artifact with the target checksum', async () => {
+    const task = await api.post('/api/projects/project_dev/tasks').set('Idempotency-Key', randomUUID())
+      .send({ title: 'Private target task', goal: 'File identity', acceptanceCriteria: ['Keep file ownership'], priority: 'high' }).expect(201);
+    const target = await api.post(`/api/tasks/${task.body.id}/artifacts`).set('Idempotency-Key', randomUUID())
+      .send({ type: 'plan', content: '# Another task content' }).expect(201);
+    const source = await api.post('/api/tasks/task_dev/artifacts').set('Idempotency-Key', randomUUID())
+      .send({ type: 'plan', content: '# Source task content' }).expect(201);
+    const sourcePath = fileURLToPath(source.body.uri);
+    await rename(sourcePath, `${sourcePath}.original`);
+    await symlink(fileURLToPath(target.body.uri), sourcePath);
+    await api.db.updateTable('artifact').set({ checksum: target.body.checksum }).where('artifact_id', '=', source.body.artifactId).execute();
+    expect((await content(source.body.artifactId).expect(403)).body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('reads an exact artifact path through a workspace ancestor alias', async () => {
+    const aliasParent = await mkdtemp(join(tmpdir(), 'titan-workspace-alias-'));
+    const aliasWorkspace = join(aliasParent, 'workspace');
+    await symlink(await realpath(workspace), aliasWorkspace);
+    const session = await api.post('/api/tasks/task_dev/sessions').set('Idempotency-Key', randomUUID())
+      .send({ entryAgent: 'project-manager', goal: 'Trusted ancestor alias' }).expect(201);
+    await api.db.updateTable('session').set({ execution_config: JSON.stringify({ workspacePath: aliasWorkspace }) }).where('id', '=', session.body.id).execute();
+    const path = join(aliasWorkspace, '.titan', 'artifacts', namespace, 'ancestor-alias.md');
+    const value = '# Same exact artifact';
+    await writeFile(path, value);
+    expect((await content(await register(path, value, session.body.id)).expect(200)).body.content).toBe(value);
+  });
+
+  it.runIf(process.platform === 'darwin')('reads an exact artifact under the macOS /var ancestor alias', async () => {
+    const canonicalWorkspace = await realpath(workspace);
+    expect(canonicalWorkspace.startsWith('/private/var/')).toBe(true);
+    const aliasWorkspace = canonicalWorkspace.slice('/private'.length);
+    const session = await api.post('/api/tasks/task_dev/sessions').set('Idempotency-Key', randomUUID())
+      .send({ entryAgent: 'project-manager', goal: 'macOS var alias' }).expect(201);
+    await api.db.updateTable('session').set({ execution_config: JSON.stringify({ workspacePath: aliasWorkspace }) }).where('id', '=', session.body.id).execute();
+    const path = join(aliasWorkspace, '.titan', 'artifacts', namespace, 'macos-var-alias.md');
+    const value = '# macOS ancestor alias';
+    await writeFile(path, value);
+    expect((await content(await register(path, value, session.body.id)).expect(200)).body.content).toBe(value);
   });
 
   it('rejects a symlinked artifact directory escaping the workspace', async () => {
