@@ -16,8 +16,8 @@
   "x-generation": {
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
-    "templateVersion": 2,
-    "generatedAt": "2026-11-22T11:20:41.820Z"
+    "templateVersion": 3,
+    "generatedAt": "2026-11-22T13:17:23.885Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -914,6 +914,142 @@
         }
       }
     },
+    "/api/artifacts/{artifactId}/content": {
+      "get": {
+        "operationId": "getArtifactContent",
+        "summary": "读取已登记 Artifact 正文",
+        "description": "需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token。先读取既有 Artifact 元数据并校验 Project/Task/Session 归属；仅允许控制面仓库 .titan/artifacts 或该 Session execution.workspacePath/.titan/artifacts 内的本地 file URI。控制面文件必须匹配 artifactId-v{version}.md，运行时文件必须匹配 artifact://UUID/logicalPath 引用；禁止借用同目录其他工件文件。realpath 校验文件及工件根目录，打开后再次复核路径与 inode，拒绝符号链接逃逸及目录替换。只读 UTF-8 的 .md/.markdown、.json、.txt/.text/.log；不执行或渲染 HTML。读取上限为 2097152 字节，按原始字节验证 SHA-256。超限返回 400 VALIDATION_FAILED/details.reason=ARTIFACT_CONTENT_TOO_LARGE，details.maxBytes=2097152；校验和不符返回 409 VERSION_CONFLICT/details.reason=ARTIFACT_CHECKSUM_MISMATCH；格式或编码不支持返回 400，越界返回 403，元数据或文件缺失返回 404。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "正文、扩展名对应格式、已核对的校验和及 UTF-8 字节数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactContent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/console/state": {
+      "get": {
+        "operationId": "getConsoleState",
+        "summary": "读取本机控制台业务状态",
+        "description": "需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token；未配置或不匹配返回 401。只读 PostgreSQL 持久事实；每个数组默认最多 100 条，limit 对所有数组生效，以 createdAt 降序、id 升序稳定排序，无游标。子实体仅查询本次返回父实体的 ID；选 Task 时其父 Project 和子 Session/Run 同步限定；未知 Project/Task 或二者不匹配返回 404 RESOURCE_NOT_FOUND。Daemon 为本机公共元数据，不随任务筛选，仅 environmentType=local；状态按心跳时间计算。execution 省略 credentialRef 及任意未声明字段，不包含权限快照、authToken、claimToken 或原始凭证。未知查询参数返回 400。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            }
+          },
+          {
+            "name": "taskId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "批量读取且字段经过白名单映射的项目、任务、会话、运行与本机 Daemon。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleState"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/artifacts/{artifactId}/approve": {
       "post": {
         "operationId": "approveArtifact",
@@ -1662,6 +1798,11 @@
         "scheme": "bearer",
         "bearerFormat": "64 lowercase hexadecimal characters",
         "description": "Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。"
+      },
+      "ConsoleBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Authorization: Bearer <TITAN_CONSOLE_TOKEN>；仅用于新增控制台状态与工件正文接口。由本机服务端环境配置，未设置时拒绝访问；不是模型 API Key。"
       }
     },
     "parameters": {
@@ -3258,6 +3399,254 @@
           "code",
           "message",
           "retryable"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleExecutionConfig": {
+        "type": "object",
+        "properties": {
+          "daemonId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "qwen"
+            ]
+          },
+          "modelRef": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "workspacePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "allowedTools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 100
+          },
+          "maxTurns": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 10000
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 86400000
+          }
+        },
+        "required": [
+          "daemonId",
+          "runtime",
+          "workspacePath",
+          "allowedTools",
+          "maxTurns",
+          "timeoutMs"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          },
+          "planHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ConsoleExecutionConfig"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "taskId",
+          "status",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleDaemonView": {
+        "type": "object",
+        "properties": {
+          "daemonId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "machineName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "workspaceRoots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxConcurrentSessions": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "daemonVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "registered",
+              "connecting",
+              "ready",
+              "draining",
+              "reconnecting",
+              "disconnected",
+              "revoked"
+            ]
+          },
+          "lastHeartbeatAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "daemonId",
+          "machineName",
+          "environmentType",
+          "capabilities",
+          "workspaceRoots",
+          "maxConcurrentSessions",
+          "daemonVersion",
+          "status",
+          "lastHeartbeatAt"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleState": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "maxItems": 100
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "maxItems": 100
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleSession"
+            },
+            "maxItems": 100
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "maxItems": 100
+          },
+          "daemons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleDaemonView"
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "projects",
+          "tasks",
+          "sessions",
+          "runs",
+          "daemons"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactContent": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "json",
+              "text"
+            ]
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2097152
+          }
+        },
+        "required": [
+          "content",
+          "format",
+          "checksum",
+          "bytes"
         ],
         "additionalProperties": false
       }

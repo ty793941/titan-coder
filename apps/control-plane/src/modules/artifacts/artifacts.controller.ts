@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query } from '@nestjs/common';
 import { ArtifactsService } from './artifacts.service.js';
+import { authenticateConsole } from '../../common/console-auth.js';
 
 @Controller('/api')
 export class ArtifactsController {
@@ -28,5 +29,11 @@ export class ArtifactsController {
   @Get('/artifacts/:artifactId')
   get(@Param('artifactId') artifactId: string) {
     return this.artifacts.get(artifactId);
+  }
+
+  @Get('/artifacts/:artifactId/content')
+  content(@Param('artifactId') artifactId: string, @Headers('authorization') authorization?: string) {
+    authenticateConsole(authorization);
+    return this.artifacts.content(artifactId);
   }
 }

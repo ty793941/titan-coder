@@ -140,6 +140,17 @@ schemas.StageRequest.description = '仅允许相邻 QRSPI 阶段推进；要求 
 schemas.DaemonHeartbeatRequest.description = '正文可省略；daemonId 若提供须等于路径 daemonId。sequence 与 occurredAt 当前仅校验，不用于心跳去重，服务端采用收到时间。';
 schemas.DaemonEventRequest.description = 'daemonId 可省略，提供时须匹配路径；(daemonId,eventId) 重复返回 created=false，当前不比较重复事件正文，也不要求 sequence 连续。';
 schemas.FailRequest.description = '仅用于无 execution_job 的 Run；errorCode 无 Zod 运行时校验，按字符串使用，缺省或 null 时使用 TOOL_EXECUTION_FAILED。';
+schemas.ConsoleExecutionConfig = jsonSchema(source.executionConfigSchema.omit({ credentialRef: true }));
+schemas.ConsoleSession = object({ id, taskId: id, status: ref('ExecutionStatus'), planHash: id,
+  execution: ref('ConsoleExecutionConfig'), createdAt: date }, ['id', 'taskId', 'status', 'createdAt']);
+schemas.ConsoleDaemonView = { ...schemas.DaemonView, additionalProperties: false };
+schemas.ConsoleState = object({
+  projects: { ...array(ref('Project')), maxItems: 100 }, tasks: { ...array(ref('Task')), maxItems: 100 },
+  sessions: { ...array(ref('ConsoleSession')), maxItems: 100 }, runs: { ...array(ref('Run')), maxItems: 100 },
+  daemons: { ...array(ref('ConsoleDaemonView')), maxItems: 100 },
+});
+schemas.ArtifactContent = object({ content: text, format: { type: 'string', enum: ['markdown', 'json', 'text'] },
+  checksum: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, bytes: { type: 'integer', minimum: 0, maximum: 2097152 } });
 
 const json = schema => ({ 'application/json': { schema } });
 const response = (description, schema) => ({ description, ...(schema ? { content: json(schema) } : {}) });
@@ -154,7 +165,8 @@ function operation(method, path, operationId, summary, options = {}) {
   if (options.auth || options.forbidden) responses['403'] = errorResponse;
   paths[path] ??= {};
   paths[path][method] = {
-    operationId, summary, description: options.description ?? summary, security: options.auth ? [{ DaemonBearer: [] }] : [], parameters,
+    operationId, summary, description: options.description ?? summary,
+    security: options.auth === 'console' ? [{ ConsoleBearer: [] }] : options.auth ? [{ DaemonBearer: [] }] : [], parameters,
     ...(options.body ? { requestBody: { required: options.bodyRequired !== false, content: json(ref(options.body)) } } : {}),
     responses,
     ...(options.idempotency !== undefined ? { 'x-idempotency-required': options.idempotency } : {}),
@@ -193,6 +205,20 @@ operation('get', '/api/tasks/{taskId}/artifacts', 'listArtifacts', '列出 Task 
   responses: { '200': response('Artifact 数组。', array(ref('Artifact'))) },
 });
 operation('get', '/api/artifacts/{artifactId}', 'getArtifact', '查询 Artifact', { responses: { '200': response('元数据，不包含文件正文。', ref('Artifact')) } });
+operation('get', '/api/artifacts/{artifactId}/content', 'getArtifactContent', '读取已登记 Artifact 正文', {
+  auth: 'console',
+  description: '需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token。先读取既有 Artifact 元数据并校验 Project/Task/Session 归属；仅允许控制面仓库 .titan/artifacts 或该 Session execution.workspacePath/.titan/artifacts 内的本地 file URI。控制面文件必须匹配 artifactId-v{version}.md，运行时文件必须匹配 artifact://UUID/logicalPath 引用；禁止借用同目录其他工件文件。realpath 校验文件及工件根目录，打开后再次复核路径与 inode，拒绝符号链接逃逸及目录替换。只读 UTF-8 的 .md/.markdown、.json、.txt/.text/.log；不执行或渲染 HTML。读取上限为 2097152 字节，按原始字节验证 SHA-256。超限返回 400 VALIDATION_FAILED/details.reason=ARTIFACT_CONTENT_TOO_LARGE，details.maxBytes=2097152；校验和不符返回 409 VERSION_CONFLICT/details.reason=ARTIFACT_CHECKSUM_MISMATCH；格式或编码不支持返回 400，越界返回 403，元数据或文件缺失返回 404。',
+  responses: { '200': response('正文、扩展名对应格式、已核对的校验和及 UTF-8 字节数。', ref('ArtifactContent')) },
+});
+operation('get', '/api/console/state', 'getConsoleState', '读取本机控制台业务状态', {
+  auth: 'console',
+  description: '需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token；未配置或不匹配返回 401。只读 PostgreSQL 持久事实；每个数组默认最多 100 条，limit 对所有数组生效，以 createdAt 降序、id 升序稳定排序，无游标。子实体仅查询本次返回父实体的 ID；选 Task 时其父 Project 和子 Session/Run 同步限定；未知 Project/Task 或二者不匹配返回 404 RESOURCE_NOT_FOUND。Daemon 为本机公共元数据，不随任务筛选，仅 environmentType=local；状态按心跳时间计算。execution 省略 credentialRef 及任意未声明字段，不包含权限快照、authToken、claimToken 或原始凭证。未知查询参数返回 400。',
+  parameters: [
+    ...['projectId', 'taskId'].map(name => ({ name, in: 'query', required: false, schema: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$' } })),
+    { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 100 } },
+  ],
+  responses: { '200': response('批量读取且字段经过白名单映射的项目、任务、会话、运行与本机 Daemon。', ref('ConsoleState')) },
+});
 operation('post', '/api/artifacts/{artifactId}/approve', 'approveArtifact', '批准最新 QRSPI 准备工件', { description: '仅 questions/research/design/structure/plan 的最新版本可批准；重复批准已批准版本直接返回。记录审批事件及审计；不等同于阶段推进。', responses: { '200': response('已批准 Artifact。', ref('Artifact')) } });
 operation('get', '/api/runs/{runId}/events', 'streamRunEvents', '重放或跟随 Run SSE', {
   description: 'Last-Event-ID 为 Run 事件 sequence（非 eventId），缺省 0；从其后重放。仅 follow=true 持续轮询（250ms），空闲约 15s 注释心跳。id 为 sequence，event 为 eventType，data 为 EventEnvelope JSON。起流前返回 ApiError；起流后异常以 stream.error 数据帧结束，不能改 HTTP 状态。',
@@ -217,11 +243,14 @@ const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
   info: { title: 'Titan Phase 1 Control Plane', version: '1.1.0', description: '按现有 NestJS Controller 与 Zod 冻结的 HTTP/JSON + SSE 契约，包含 pause 与创建新 Run 的 resume；不提供原进程或原生模型会话热恢复。ConnectRPC、跨环境 Handoff、Git Snapshot 传输仅冻结预留协议。认证覆盖以各操作 security 为准。' },
   servers: [{ url: 'http://127.0.0.1:3000', description: '本机默认端口；CONTROL_PLANE_PORT 可覆盖。' }], security: [],
-  'x-generation': { source: 'packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts', template: 'packages/contracts/openapi/generate.mjs', templateVersion: 2, generatedAt: new Date().toISOString() },
+  'x-generation': { source: 'packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts', template: 'packages/contracts/openapi/generate.mjs', templateVersion: 3, generatedAt: new Date().toISOString() },
   'x-reserved-only': ['ConnectRPC', 'SessionHandoff', 'GitSnapshotTransfer'],
   paths,
   components: {
-    securitySchemes: { DaemonBearer: { type: 'http', scheme: 'bearer', bearerFormat: '64 lowercase hexadecimal characters', description: 'Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。' } },
+    securitySchemes: {
+      DaemonBearer: { type: 'http', scheme: 'bearer', bearerFormat: '64 lowercase hexadecimal characters', description: 'Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。' },
+      ConsoleBearer: { type: 'http', scheme: 'bearer', description: 'Authorization: Bearer <TITAN_CONSOLE_TOKEN>；仅用于新增控制台状态与工件正文接口。由本机服务端环境配置，未设置时拒绝访问；不是模型 API Key。' },
+    },
     parameters: {
       IdempotencyKey: { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', minLength: 1, maxLength: 200 }, description: 'Project/Task/Session/Run 创建及 Run resume 可改用正文 idempotencyKey，请求头优先；trim 后校验长度，不是 Daemon 事件去重键。' },
       ArtifactIdempotencyKey: { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string' }, description: 'Artifact 只读请求头，当前不校验长度；省略时由控制器生成基于 Date.now() 的键，不能作为安全重放保证。' },

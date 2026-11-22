@@ -29,7 +29,8 @@ function controllerRoutes() {
         path: `${prefix}${match[2] ?? ''}`.replace(/:([A-Za-z]+)/g, '{$1}'),
         method: method.toLowerCase(),
         status: /@HttpCode\((\d+)\)/.exec(body)?.[1] ?? (method === 'Post' ? '201' : '200'),
-        authenticated: body.includes('this.daemons.authenticate('),
+        security: body.includes('this.daemons.authenticate(') ? [{ DaemonBearer: [] }]
+          : body.includes('authenticateConsole(') ? [{ ConsoleBearer: [] }] : [],
       };
     });
   });
@@ -46,7 +47,7 @@ describe('Phase 1 OpenAPI freeze', () => {
     for (const route of controllerRoutes()) {
       const operation = api.paths[route.path][route.method];
       expect(operation.responses, `${route.method} ${route.path}`).toHaveProperty(route.status);
-      expect(operation.security).toEqual(route.authenticated ? [{ DaemonBearer: [] }] : []);
+      expect(operation.security).toEqual(route.security);
       for (const name of [...route.path.matchAll(/\{([^}]+)\}/g)].map(match => match[1])) {
         expect(operation.parameters).toContainEqual({ name, in: 'path', required: true, schema: { type: 'string', minLength: 1 } });
       }
@@ -120,6 +121,36 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(pause.responses['200'].content['application/json'].schema).toEqual(ref('Run'));
     expect(pause).not.toHaveProperty('requestBody');
     expect(pause.security).toEqual([]);
+  });
+
+  it('freezes authenticated console state, bounded queries and credential-free execution', () => {
+    const api = load();
+    const operation = api.paths['/api/console/state']?.get;
+    expect(operation).toBeDefined();
+    expect(operation.security).toEqual([{ ConsoleBearer: [] }]);
+    expect(operation.responses['200'].content['application/json'].schema).toEqual(ref('ConsoleState'));
+    expect(operation.parameters).toContainEqual(expect.objectContaining({ name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 100 } }));
+    expect(operation.parameters).toContainEqual(expect.objectContaining({ name: 'projectId', in: 'query' }));
+    expect(operation.parameters).toContainEqual(expect.objectContaining({ name: 'taskId', in: 'query' }));
+    expect(api.components.schemas.ConsoleState.required).toEqual(['projects', 'tasks', 'sessions', 'runs', 'daemons']);
+    for (const property of Object.values(api.components.schemas.ConsoleState.properties)) expect(property).toMatchObject({ type: 'array', maxItems: 100 });
+    const execution = api.components.schemas.ConsoleExecutionConfig;
+    expect(Object.keys(execution.properties).sort()).toEqual(Object.keys(contracts.executionConfigSchema.omit({ credentialRef: true }).shape).sort());
+    expect(execution.additionalProperties).toBe(false);
+    expect(api.components.schemas.ConsoleDaemonView.additionalProperties).toBe(false);
+    expect(api.components.securitySchemes.ConsoleBearer).toMatchObject({ type: 'http', scheme: 'bearer' });
+  });
+
+  it('freezes authenticated artifact content and integrity error responses', () => {
+    const api = load();
+    const operation = api.paths['/api/artifacts/{artifactId}/content']?.get;
+    expect(operation).toBeDefined();
+    expect(operation.security).toEqual([{ ConsoleBearer: [] }]);
+    expect(operation.responses['200'].content['application/json'].schema).toEqual(ref('ArtifactContent'));
+    for (const status of ['400', '401', '403', '404', '409']) expect(operation.responses[status]).toBeDefined();
+    expect(api.components.schemas.ArtifactContent).toMatchObject({ additionalProperties: false, required: ['content', 'format', 'checksum', 'bytes'] });
+    expect(api.components.schemas.ArtifactContent.properties.bytes).toEqual({ type: 'integer', minimum: 0, maximum: 2097152 });
+    expect(api.components.schemas.ArtifactContent.properties.format.enum).toEqual(['markdown', 'json', 'text']);
   });
 
   it('documents resume as a new 201 Run with optional checkpoint and header/body idempotency', () => {

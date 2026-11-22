@@ -16,10 +16,12 @@ import { TasksService } from './modules/tasks/tasks.service.js';
 import { DaemonsController } from './modules/daemons/daemons.controller.js';
 import { DaemonsService } from './modules/daemons/daemons.service.js';
 import { ExecutionService } from './modules/daemons/execution.service.js';
+import { ConsoleController } from './modules/console/console.controller.js';
+import { ConsoleService } from './modules/console/console.service.js';
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService],
 })
 export class AppModule {}

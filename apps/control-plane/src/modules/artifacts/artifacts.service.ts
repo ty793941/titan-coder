@@ -11,6 +11,7 @@ import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
 import { qrspiArtifactStages } from '../tasks/qrspi-gate.js';
+import { controlPlaneArtifactRoot, readArtifactContent, type ArtifactContentRoot } from './artifact-content.js';
 
 const identifier = z.string().trim().min(1).max(200);
 const artifactInputSchema = z.object({
@@ -49,7 +50,7 @@ export class ArtifactsService {
         .where('task_id', '=', taskId).where('type', '=', type).executeTakeFirst();
       const version = Number(previous?.max_version ?? 0) + 1;
       const artifactId = `artifact_${randomUUID()}`;
-      const artifactRoot = resolve(process.cwd(), process.cwd().endsWith('/control-plane') ? '../../.titan/artifacts' : '.titan/artifacts');
+      const artifactRoot = controlPlaneArtifactRoot();
       await mkdir(artifactRoot, { recursive: true });
       const filePath = resolve(artifactRoot, `${artifactId}-v${version}.md`);
       await writeFile(filePath, parsed.content, { encoding: 'utf8', flag: 'wx' });
@@ -111,6 +112,34 @@ export class ArtifactsService {
     const row = await this.database.db.selectFrom('artifact').selectAll().where('artifact_id', '=', artifactId).executeTakeFirst();
     if (!row) throw new DomainError('RESOURCE_NOT_FOUND', `artifact ${artifactId} was not found`);
     return this.toArtifact(row);
+  }
+
+  async content(artifactId: string) {
+    const artifact = artifactSchema.parse(await this.get(identifier.parse(artifactId)));
+    const task = await this.database.db.selectFrom('task').select('project_id').where('id', '=', artifact.taskId).executeTakeFirst();
+    if (!task || task.project_id !== artifact.projectId) throw new DomainError('PERMISSION_DENIED', 'artifact project does not match its task');
+    const artifactRoot = controlPlaneArtifactRoot();
+    const roots: ArtifactContentRoot[] = [{ workspacePath: resolve(artifactRoot, '../..'), artifactRoot,
+      expectedPath: resolve(artifactRoot, `${artifact.artifactId}-v${artifact.version}.md`) }];
+    if (artifact.sessionId) {
+      const session = await this.database.db.selectFrom('session').select(['task_id', 'execution_config']).where('id', '=', artifact.sessionId).executeTakeFirst();
+      if (!session || session.task_id !== artifact.taskId) throw new DomainError('PERMISSION_DENIED', 'artifact session does not match its task');
+      const config = z.object({ workspacePath: z.string().startsWith('/') }).passthrough().safeParse(session.execution_config);
+      if (config.success && artifact.reference) {
+        const reference = /^artifact:\/\/([0-9a-f-]{36})\/(.+)$/i.exec(artifact.reference);
+        if (!reference) throw new DomainError('PERMISSION_DENIED', 'artifact reference is invalid');
+        let logicalPath: string;
+        try { logicalPath = decodeURIComponent(reference[2]!); }
+        catch { throw new DomainError('PERMISSION_DENIED', 'artifact reference contains invalid escaping'); }
+        if (logicalPath.startsWith('/') || logicalPath.includes('\\') || logicalPath.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+          throw new DomainError('PERMISSION_DENIED', 'artifact reference escapes its artifact directory');
+        }
+        const workspaceRoot = resolve(config.data.workspacePath, '.titan', 'artifacts');
+        roots.push({ workspacePath: config.data.workspacePath, artifactRoot: workspaceRoot,
+          expectedPath: resolve(workspaceRoot, reference[1]!, logicalPath) });
+      }
+    }
+    return readArtifactContent(artifact.uri, artifact.checksum, roots);
   }
 
   async list(taskId: string, resolution?: string): Promise<Artifact[]> {
