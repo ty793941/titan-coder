@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AgentLoop, CheckpointStore, containsSensitive, containsSensitivePath, containsUnsafePath, FileCheckpointStore, FileToolExecutionLedger, GoalGate, HookRunner, PermissionEngine, ToolRegistry } from '@titan/agent-core';
@@ -174,7 +174,8 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
   };
   const permissions = new PermissionEngine(dispatch.config.allowedTools.map(action => ({ source: 'run' as const, action, resource: dispatch.runId, decision: 'allow' as const })));
   const hooks = new HookRunner(runtimeSafetyHooks(), { onAudit: emitAudit });
-  const ledgerRoot = join(dispatch.config.workspacePath, '.titan', 'tool-ledger');
+  const sessionScope = createHash('sha256').update(`${dispatch.projectId}:${dispatch.taskId}:${dispatch.sessionId}`).digest('hex');
+  const ledgerRoot = join(dispatch.config.workspacePath, '.titan', 'tool-ledger', sessionScope);
   const tools = new ToolRegistry({ permission: permissions, hooks, ledger: new FileToolExecutionLedger(ledgerRoot, dispatch.config.workspacePath), onAudit: emitAudit });
   for (const tool of createRuntimeTools()) tools.register(tool);
   const checkpointStore = new FileCheckpointStore(dependencies.checkpointRoot ?? join(dispatch.config.workspacePath, '.titan', 'checkpoints'), dispatch.config.workspacePath, secretValues);

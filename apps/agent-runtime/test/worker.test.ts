@@ -102,6 +102,18 @@ describe('Runtime worker', () => {
     expect(firstResult.checkpoint?.successfulTools[0]?.inputHash).toBe(hashToolInput({ path: 'answer.txt', content: 'answer' }));
   });
 
+  it('isolates durable tool results between independent sessions in one workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'titan-session-ledger-')); roots.push(root);
+    const config = { ...dispatch().config, workspacePath: root };
+    const dependencies = { credentialResolver: async () => 'fixture-secret', sendProgress: () => undefined };
+    const first = await executeDispatch(dispatch({ config }), { ...dependencies, adapterFactory: () => new FixtureAdapter() });
+    const second = await executeDispatch(dispatch({ config, sessionId: 'independent-session', runId: 'independent-run' }), { ...dependencies, adapterFactory: () => new FixtureAdapter() });
+    expect(first.status).toBe('satisfied');
+    expect(second.status).toBe('satisfied');
+    const output = (result: typeof first) => result.checkpoint?.successfulTools[0]?.output as { reference: string };
+    expect(output(second).reference).not.toBe(output(first).reference);
+  });
+
   it('maps an abort to cancelled and lets the adapter clean up', async () => {
     const root = await mkdtemp(join(tmpdir(), 'titan-worker-cancel-')); roots.push(root);
     let release!: () => void;
