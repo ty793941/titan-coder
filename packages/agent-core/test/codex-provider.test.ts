@@ -72,6 +72,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     send({ method: 'turn/started', params: { threadId: thread, turn: { id: current } } });
     if (mode === 'hang' || mode === 'late-interrupt') return;
     if (mode === 'crash') return process.exit(18);
+    if (mode === 'auth-401') { process.stderr.write('401 Unauthorized: Incorrect API key provided: secret-test-key\n'); return; }
     if (mode === 'rpc-error') return send({ method: 'turn/completed', params: { threadId: thread, turn: { id: current, status: 'failed', error: { message: 'secret-test-key' } } } });
     if (mode === 'approval') return send({ id: 'approval', method: 'item/commandExecution/requestApproval', params: { threadId: thread, turnId: current } });
     if (mode === 'tool' || mode === 'unknown-tool') return send({ id: 'tool', method: 'item/tool/call', params: { threadId: thread, turnId: current, callId: 'call-1', tool: mode === 'tool' ? 'lookup' : 'unregistered', arguments: { q: 'hello' } } });
@@ -190,6 +191,12 @@ describe('Codex App Server stdio provider', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('RUNTIME_ADAPTER_UNAVAILABLE');
     expect(error.message).not.toContain('secret-test-key');
+  });
+
+  it('surfaces an invalid OpenAI API key reported on App Server stderr', async () => {
+    const { adapter, session } = await fixture('auth-401', 1000);
+    await adapter.sendInput(session, { text: 'test authentication' });
+    await expect(Array.fromAsync(adapter.streamEvents(session))).rejects.toThrow('OpenAI API Key 无效或没有模型权限');
   });
 
   it('aborts an in-flight turn and ends readers without waiting for the request timeout', async () => {

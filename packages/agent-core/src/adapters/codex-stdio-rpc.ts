@@ -30,7 +30,13 @@ export class CodexStdioRpc {
     this.child.on('error', () => this.fail(providerError('Codex', 'App Server process unavailable')));
     this.child.on('exit', (code, signal) => this.fail(providerError('Codex', 'App Server exited', { exitCode: code, signal })));
     this.child.stdin.on('error', () => this.fail(providerError('Codex', 'App Server input closed')));
-    // 消费 stderr 以避免阻塞；供应商诊断可能包含凭证，禁止转发或持久化。
+    // 只识别明确的认证失败，不转发 stderr；供应商诊断可能包含敏感信息。
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
+      if (/401\s+Unauthorized|Incorrect API key|invalid api key|authentication failed/i.test(chunk)) {
+        this.fail(providerError('Codex', 'OpenAI API Key 无效或没有模型权限'));
+      }
+    });
     this.child.stderr.resume();
     this.child.stdout.setEncoding('utf8');
     let buffer = '';
