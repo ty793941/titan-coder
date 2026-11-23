@@ -56,6 +56,7 @@ type SessionState = {
   events: TurnEvents;
   checkpoints: Set<string>;
   tools: Map<string, string | number>;
+  toolNames: Map<string, string>;
   timer: ReturnType<typeof setTimeout> | undefined;
   detach: (() => void) | undefined;
   detachTurn: (() => void) | undefined;
@@ -63,6 +64,14 @@ type SessionState = {
   finishTurn: (() => void) | undefined;
   dispose: Promise<void> | undefined;
 };
+
+export function codexToolName(name: string): string {
+  return name.replaceAll('.', '_');
+}
+
+export function platformToolName(name: string): string {
+  return name.replaceAll('_', '.');
+}
 
 export class CodexStdioTransport implements CodexTransport {
   private readonly sessions = new Map<string, SessionState>();
@@ -97,7 +106,7 @@ export class CodexStdioTransport implements CodexTransport {
           void this.dispose(state);
         }
       });
-      state = { rpc, home, config: { ...config, cwd }, threadId: '', turnId: undefined, busy: false, hasTurn: false, paused: false, events: new TurnEvents(), checkpoints: new Set(), tools: new Map(), timer: undefined, detach: undefined, detachTurn: undefined, turnFinished: Promise.resolve(), finishTurn: undefined, dispose: undefined };
+      state = { rpc, home, config: { ...config, cwd }, threadId: '', turnId: undefined, busy: false, hasTurn: false, paused: false, events: new TurnEvents(), checkpoints: new Set(), tools: new Map(), toolNames: new Map(), timer: undefined, detach: undefined, detachTurn: undefined, turnFinished: Promise.resolve(), finishTurn: undefined, dispose: undefined };
       if (config.signal) {
         const current = state;
         const abort = () => { current.events.fail(providerError('Codex', 'session aborted')); void this.dispose(current); };
@@ -117,7 +126,7 @@ export class CodexStdioTransport implements CodexTransport {
         // 恢复依赖 rollout；只写入当前子进程的临时目录，认证仍采用内存存储。
         ephemeral: false,
         ...(config.workspace ? { runtimeWorkspaceRoots: [config.workspace] } : {}),
-        ...(config.tools?.length ? { dynamicTools: config.tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })) } : {}),
+        ...(config.tools?.length ? { dynamicTools: config.tools.map(tool => ({ name: codexToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema })) } : {}),
       });
       if (typeof result?.thread?.id !== 'string' || !result.thread.id) throw providerError('Codex', 'thread/start returned no thread');
       state.threadId = result.thread.id;
@@ -231,9 +240,10 @@ export class CodexStdioTransport implements CodexTransport {
       if (message.method === 'item/commandExecution/requestApproval' || message.method === 'item/fileChange/requestApproval') state.rpc.respond(message.id, { decision: 'decline' });
       else if (message.method === 'execCommandApproval' || message.method === 'applyPatchApproval') state.rpc.respond(message.id, { decision: 'denied' });
       else if (message.method === 'item/permissions/requestApproval') state.rpc.respond(message.id, { permissions: {}, scope: 'turn' });
-      else if (message.method === 'item/tool/call' && state.busy && params.threadId === state.threadId && typeof params.callId === 'string' && !state.tools.has(params.callId) && state.config.tools?.some(tool => tool.name === params.tool)) {
+      else if (message.method === 'item/tool/call' && state.busy && params.threadId === state.threadId && typeof params.callId === 'string' && typeof params.tool === 'string' && !state.tools.has(params.callId) && state.config.tools?.some(tool => tool.name === platformToolName(params.tool))) {
         state.tools.set(params.callId, message.id);
-        state.events.push({ type: 'tool.requested', payload: { id: params.callId, name: params.tool, arguments: params.arguments } });
+        state.toolNames.set(params.callId, platformToolName(params.tool));
+        state.events.push({ type: 'tool.requested', payload: { id: params.callId, name: platformToolName(params.tool), arguments: params.arguments } });
       } else state.rpc.reject(message.id);
       return;
     }
@@ -252,6 +262,7 @@ export class CodexStdioTransport implements CodexTransport {
       state.busy = false;
       state.turnId = undefined;
       state.tools.clear();
+      state.toolNames.clear();
       state.finishTurn?.();
       state.finishTurn = undefined;
       if (params.turn?.status === 'failed') {

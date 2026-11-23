@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCodexApiKeyAdapter } from '../src/adapters/provider-adapters.js';
+import { codexToolName, platformToolName } from '../src/adapters/codex-stdio-transport.js';
 
 // 用真实子进程校验线路协议；不访问供应商，也不使用真实凭证。
 const serverScript = String.raw`
@@ -109,6 +110,12 @@ async function fixture(mode = 'normal', timeoutMs = 1000) {
 }
 
 describe('Codex App Server stdio provider', () => {
+  it('maps platform tool names to App Server safe names and back', () => {
+    expect(codexToolName('artifact.write')).toBe('artifact_write');
+    expect(platformToolName('artifact_write')).toBe('artifact.write');
+    expect(codexToolName('workspace-read')).toBe('workspace-read');
+  });
+
   it('initializes, logs in with an in-memory key, and sends actual input with independent threads', async () => {
     const first = await fixture();
     const second = await fixture();

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { providerError } from './provider-credentials.js';
 
 export type RpcMessage = { id?: number | string; method?: string; params?: Record<string, any>; result?: any; error?: { code?: number } };
-type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+type Pending = { method: string; resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export class CodexStdioRpc {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -52,7 +52,7 @@ export class CodexStdioRpc {
             if (!request) continue;
             clearTimeout(request.timer);
             this.pending.delete(message.id);
-            if (message.error) request.reject(providerError('Codex', 'App Server rejected request', { rpcCode: message.error.code }));
+            if (message.error) request.reject(providerError('Codex', `App Server rejected ${request.method}`, { rpcCode: message.error.code }));
             else if ('result' in message) request.resolve(message.result);
             else request.reject(providerError('Codex', 'invalid RPC response'));
           } else throw new Error();
@@ -69,7 +69,7 @@ export class CodexStdioRpc {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.fail(providerError('Codex', 'App Server request timed out', { method })), this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { method, resolve, reject, timer });
       this.write({ id, method, params });
     });
   }
