@@ -70,9 +70,9 @@ Control Plane 继续负责：
 
 Control Plane 不直接调用 Docker，不读取 Secret，不持有容器内工作区，也不通过普通环境变量向容器传递凭证。
 
-### 4.2 Cloud Worker
+### 4.2 Daemon 内置 Cloud Executor
 
-Cloud Worker 是独立 Node.js 进程，注册为 `environmentType=cloud` 的 Daemon。它负责：
+Cloud Worker MVP 不新增独立服务进程，而是把 Cloud Executor 作为现有 Daemon 的执行模式。Daemon 以 `environmentType=cloud` 和云端能力注册时，由 Cloud Executor 负责：
 
 - 使用已有 Daemon 注册和心跳协议连接 Control Plane。
 - 领取带租约的云端 Dispatch。
@@ -83,7 +83,7 @@ Cloud Worker 是独立 Node.js 进程，注册为 `environmentType=cloud` 的 Da
 - 处理取消、超时、Worker 重启、容器丢失和租约过期。
 - 在执行结束后清理临时资源，并将清理结果写入审计事实。
 
-Cloud Worker 不能推进 Task 阶段、批准 Artifact、修改权限或操作不属于自身租约的容器。
+Cloud Executor 不能推进 Task 阶段、批准 Artifact、修改权限或操作不属于自身租约的容器。
 
 ### 4.3 Session Container
 
@@ -120,7 +120,7 @@ SecretBroker
   revokeLease(leaseRef) -> void
 ```
 
-Phase 2A 的 `ContainerRuntime` 使用 Docker CLI 或 Docker API 的受限实现；`SnapshotTransfer` 使用本机受控目录和 Git Patch/Snapshot；`SecretBroker` 使用 Cloud Worker 进程内存中的一次性租约。接口不得泄露真实 Secret 到返回对象、日志或持久化字段。
+Phase 2A 的 `ContainerRuntime` 使用 Docker CLI 或 Docker API 的受限实现；`SnapshotTransfer` 使用本机受控目录和 Git Patch/Snapshot；`SecretBroker` 使用 Daemon 内 Cloud Executor 进程内存中的一次性租约。接口不得泄露真实 Secret 到返回对象、日志或持久化字段。
 
 ## 5. 状态与持久化
 
@@ -287,7 +287,7 @@ Control Plane 只有在 Daemon 状态为 `ready`、能力完整、并发未满�
 | `HANDOFF_TRANSFER_FAILED` | transferring | 是 | 校验清单后重试物化 |
 | `HANDOFF_TARGET_UNAVAILABLE` | starting | 是 | 等待可用 Cloud Worker，不标记源 Session 完成 |
 
-Cloud Worker 重启恢复规则：
+Cloud Executor 或 Daemon 重启恢复规则：
 
 1. 启动时扫描本地租约和 Control Plane 返回的未终态 `cloud_execution`。
 2. 对 `creating`、`starting`、`running`、`stopping` 记录检查容器 ID 和状态。
