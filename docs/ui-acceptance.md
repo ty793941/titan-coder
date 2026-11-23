@@ -22,14 +22,15 @@ pnpm ui
 
 1. 进入左侧“环境与 Key”。
 2. 在 Qwen 卡片密码框输入百炼官方 Key，点击“保存到本机密钥链”。当前默认北京地域。
-3. 在 Codex 卡片输入 OpenAI 官方 API Key，点击“保存到本机密钥链”。
+3. 在 Codex 卡片输入兼容 OpenAI Responses API 的完整 HTTPS URL，再输入 API Key，分别点击保存按钮。
 4. macOS 若要求解锁“登录”钥匙串或授权访问，请在系统对话框完成操作。
-5. 输入框提交后立即清空。刷新后“已配置”仅表示本机存储存在，尚未验证模型权限、网络或余额。
+5. 输入框提交后立即清空。刷新后只显示 URL 摘要、Key 是否存在和 URL 是否存在，不显示 Key；这些状态尚未验证模型权限、网络或余额。
 6. 点击“启动本机 Daemon”，等待就绪，再进入任务面板创建执行配置。
 
 | 提供方 | macOS Keychain 项目 | Session 凭证引用 |
 | --- | --- | --- |
-| Codex | `titan-openai` | `keychain://titan-openai` |
+| Codex API Key | `titan-openai` | `keychain://titan-openai` |
+| Codex API URL | `titan-openai-base-url` | `keychain://titan-openai-base-url` |
 | Qwen | `titan-qwen` | `keychain://titan-qwen` |
 
 Key 从回环地址传给专用网关，再通过子进程标准输入写入 Keychain，不出现在进程参数中，不写浏览器 localStorage、业务数据库或普通日志。页面不会返回 Key。替换时重新输入并点击“更新本机 Key”；撤销可在 macOS 钥匙串访问中手动删除对应项目，或在供应商后台撤销。
@@ -46,7 +47,7 @@ Key 从回环地址传给专用网关，再通过子进程标准输入写入 Key
 6. 查看事件与状态，操作暂停、恢复或取消。恢复创建新的 Run attempt，不覆盖旧记录。
 7. “工件与证据”查看固定版本正文、SHA-256、来源和 URI，并核对真实文件。
 
-Qwen 默认 `qwen-plus`；Codex 留空使用原生 App Server 默认模型。必须选择账户有权限的模型。新加坡等地域的 Qwen Key 不能与默认北京端点混用，需先配置对应 Provider endpoint。
+Qwen 默认 `qwen-plus`；Codex 使用 Keychain 中保存的 Responses API URL，并通过原生 App Server 的 `model_providers.titan` 配置保持 Thread、Turn、Tool、Permission 和事件链路。必须选择账户有权限的模型。Codex URL 允许 `https://`，本机开发可使用 `http://localhost` 或 `http://127.0.0.1`；拒绝凭证、查询参数、片段、换行和外部 HTTP。新加坡等地域的 Qwen Key 不能与默认北京端点混用，需先配置对应 Provider endpoint。
 
 缺少 Key、Daemon 未就绪、计划未批准或任务未进入开发执行时，界面会阻止提交。连接失败显示错误，不生成演示数据。
 
@@ -70,6 +71,6 @@ DATABASE_URL=postgresql://titan:titan@127.0.0.1:55432/titan pnpm test --force
 node packages/contracts/openapi/generate.mjs --check
 ```
 
-自动化测试不使用真实 Key；真实 Keychain 存储和供应商推理留给操作者在本机验收。
+自动化测试不使用真实 Key；真实 Keychain 存储和供应商推理留给操作者在本机验收。自定义 Codex URL 的执行测试使用本地 App Server 替身验证启动参数、Key 脱敏和协议链路。
 
 本轮浏览器与回归证据见 [UI 验证记录](ui-test-report.md)。

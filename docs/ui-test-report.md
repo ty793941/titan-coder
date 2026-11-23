@@ -1,12 +1,12 @@
 # 本机验收 UI 验证记录
 
-日期：2026-11-22。用户已授权增加 UI，并要求提供真实 Key 配置方法。此记录不代表真实 Keychain 写入或供应商推理验收通过。
+日期：2026-11-23。用户已授权增加 UI，并要求提供真实 Key 与自定义 Responses API URL 配置方法。此记录不代表真实 Keychain 写入或供应商推理验收通过。
 
 ## 交付内容
 
 - Vue 3 中文工作台：任务、运行与事件、工件与证据、环境与 Key 四个视图。
 - 实际 PostgreSQL 列表查询与固定工件正文读取，独立 Console token 认证。
-- 回环地址网关、macOS Keychain 保存入口、CSRF/Origin/Host 校验、本机 Daemon 启动与停止。
+- 回环地址网关、macOS Keychain 保存入口、Codex API URL 与 Key 分离保存、CSRF/Origin/Host 校验、本机 Daemon 启动与停止。
 - `pnpm ui` 启动入口与 `docs/ui-acceptance.md` 操作说明。
 
 ## 浏览器验收
@@ -15,12 +15,12 @@
 
 1. 创建独立的 UI 验收项目及任务。
 2. 五个准备阶段分别输入正文、保存新版本、批准并推进，最终到开发执行。
-3. 验证缺少真实 Key 时 Session 创建不可提交。
+3. 验证缺少 Codex API URL 或 Key 时 Session 创建不可提交。
 4. 从“环境与 Key”启动真实本机 Daemon，确认设备就绪。
 5. 工件页面显示五个批准版本，正文、SHA-256、URI 与来源来自实际 API。
 6. 密码输入框、移动导航可操作；1440px 桌面和 390px 窄屏无横向溢出，0 个页面 JavaScript 异常。
 
-没有输入真实 Key，没有调用付费模型。Key 保存测试使用注入的离线存储与子进程替身。
+没有输入真实 Key，没有调用付费模型。Key 与 URL 保存测试使用注入的离线存储与子进程替身；Codex Provider 测试验证 App Server 收到 Responses provider 配置且 URL 与 Key 不进入 argv、普通环境变量、事件或日志。
 
 ## 自动化验证
 
@@ -30,16 +30,16 @@ Node 22.23.5、PostgreSQL 17.12。构建、类型检查、TypeScript 静态检�
 
 | 模块 | 通过数量 |
 | --- | ---: |
-| contracts | 26 |
+| contracts | 27 |
 | web-console | 31 |
 | daemon-protocol | 1 |
 | cli | 30 |
 | domain | 4 |
-| agent-core | 57 |
+| agent-core | 60 |
 | daemon | 35 |
 | agent-runtime | 31 |
 | control-plane | 93 |
-| 合计 | 308 |
+| 合计 | 312 |
 
 最初的高并发尝试出现过 Codex 离线短超时及 Git 文件扫描超时；串行检查未放宽断言。随后发现指定的旧全局 Codex 链接失效，实际原生探测改用本机有效的 ChatGPT 随附 Codex，57 项 Core 测试完整通过。测试使用合成 Key 进行协议探测，不请求模型推理。
 
@@ -53,6 +53,7 @@ Node 22.23.5、PostgreSQL 17.12。构建、类型检查、TypeScript 静态检�
 
 - 真实 Keychain 保存需操作者在 macOS 中确认；可能出现系统解锁或访问授权对话框。
 - “已配置”仅代表本机存在凭证，账号权限、地域与模型可用性仍需真实 Run 验证。
+- 自定义 Codex Responses API URL 的最终模型验收仍需操作者提供可用 endpoint 后在本机执行真实 Run。
 - 只监听本机，未实现多人认证或公网部署。
 - Qwen 默认北京 endpoint，其他地域需匹配 Provider 配置。
 - 查询每类集合最多 100 条，当前是本机验收工作台，不是完整生产控制台。
