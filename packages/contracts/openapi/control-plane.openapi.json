@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-23T12:53:51.190Z"
+    "generatedAt": "2026-11-23T13:00:36.452Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
