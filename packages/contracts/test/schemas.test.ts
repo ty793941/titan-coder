@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventEnvelopeSchema, taskCreateRequestSchema } from '@titan/contracts';
+import { eventEnvelopeSchema, executionConfigSchema, taskCreateRequestSchema } from '@titan/contracts';
 
 describe('contracts', () => {
   it('accepts a task creation request with bounded fields', () => {
@@ -22,5 +22,13 @@ describe('contracts', () => {
       occurredAt: new Date().toISOString(),
       payload: {},
     })).toThrow();
+  });
+
+  it('accepts a separate Codex API URL credential reference', () => {
+    expect(executionConfigSchema.parse({
+      daemonId: 'daemon_1', runtime: 'codex', credentialRef: 'keychain://titan-openai',
+      baseUrlRef: 'keychain://titan-openai-base-url', workspacePath: '/workspace',
+      allowedTools: ['artifact.write'], maxTurns: 3, timeoutMs: 1000,
+    })).toMatchObject({ baseUrlRef: 'keychain://titan-openai-base-url' });
   });
 });

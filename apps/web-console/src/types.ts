@@ -31,6 +31,7 @@ export interface Execution {
   daemonId: string;
   runtime: Provider;
   credentialRef?: string;
+  baseUrlRef?: string;
   modelRef?: string;
   workspacePath: string;
   allowedTools: string[];
@@ -90,6 +91,8 @@ export interface CredentialStatus {
   provider: Provider;
   configured: boolean;
   credentialRef: string;
+  baseUrlRef?: string;
+  baseUrlConfigured?: boolean;
 }
 export interface LocalStatus {
   csrfToken: string;

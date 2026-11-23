@@ -50,7 +50,7 @@ export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301',
         if (url.pathname === '/local-api/status' && request.method === 'GET') {
           let reachable = false;
           try { reachable = (await fetch(`${controlPlaneUrl}/api/console/state?limit=1`, { headers: { authorization: `Bearer ${consoleToken}` }, signal: AbortSignal.timeout(2000) })).ok; } catch {}
-          send(200, { csrfToken, workspaceRoot: root, platform: process.platform, controlPlane: { reachable }, daemon: await daemon.status(), credentials: await Promise.all(Object.entries(providers).map(async ([provider, value]) => ({ provider, configured: await keychain.configured(provider), credentialRef: value.credentialRef }))) });
+          send(200, { csrfToken, workspaceRoot: root, platform: process.platform, controlPlane: { reachable }, daemon: await daemon.status(), credentials: await Promise.all(Object.entries(providers).map(async ([provider, value]) => ({ provider, configured: await keychain.configured(provider), credentialRef: value.credentialRef, ...(value.baseUrlRef ? { baseUrlRef: value.baseUrlRef, baseUrlConfigured: keychain.baseUrlConfigured ? await keychain.baseUrlConfigured(provider) : false } : {}) }))) });
           return;
         }
         if (url.pathname === '/local-api/credentials' && request.method === 'POST') {
@@ -58,6 +58,13 @@ export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301',
           if (Object.keys(body).some(key => !['provider', 'key'].includes(key)) || !Object.hasOwn(providers, body.provider)) throw new Error('INVALID_CREDENTIAL');
           await keychain.save(body.provider, body.key);
           send(200, { configured: true, credentialRef: providers[body.provider].credentialRef });
+          return;
+        }
+        if (url.pathname === '/local-api/provider-url' && request.method === 'POST') {
+          const body = await jsonBody(request);
+          if (Object.keys(body).some(key => !['provider', 'url'].includes(key)) || body.provider !== 'codex') throw new Error('INVALID_PROVIDER_BASE_URL');
+          await keychain.saveUrl(body.provider, body.url);
+          send(200, { configured: true, credentialRef: providers.codex.baseUrlRef });
           return;
         }
         if (request.method === 'POST' && ['/local-api/daemon/start', '/local-api/daemon/stop'].includes(url.pathname)) {

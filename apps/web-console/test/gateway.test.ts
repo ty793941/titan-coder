@@ -43,7 +43,7 @@ describe('local acceptance gateway', () => {
     const response = await fetch(`${h.base}/local-api/status`);
     const status = await response.json();
     expect(status.csrfToken).toMatch(/^[a-f0-9]{64}$/);
-    expect(status.credentials).toContainEqual({ provider: 'codex', configured: false, credentialRef: 'keychain://titan-openai' });
+    expect(status.credentials).toContainEqual(expect.objectContaining({ provider: 'codex', configured: false, credentialRef: 'keychain://titan-openai', baseUrlRef: 'keychain://titan-openai-base-url', baseUrlConfigured: false }));
     expect(JSON.stringify(status)).not.toContain('private-console-token');
   });
 

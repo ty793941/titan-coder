@@ -7,7 +7,7 @@ import type { Checkpoint } from '@titan/agent-core';
 import { createCodexApiKeyAdapter, createQwenOfficialAdapter } from '@titan/agent-core';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
 import type { AgentRunResult } from '@titan/agent-core';
-import { resolveCredential } from './credentials.js';
+import { resolveCredential, validateProviderBaseUrl } from './credentials.js';
 import { loadSkillContext, persistSkillContextSnapshot, sanitizeSkillSecrets } from './skills.js';
 import { createRuntimeTools, runtimeToolSpecs } from './tools.js';
 
@@ -125,6 +125,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
   }
   const credentialResolver = dependencies.credentialResolver ?? resolveCredential;
   const credential = await credentialResolver(dispatch.config.credentialRef);
+  const baseUrl = dispatch.config.baseUrlRef ? await credentialResolver(dispatch.config.baseUrlRef) : undefined;
   if (credential) secretValues = [credential];
   if (dependencies.signal?.aborted) {
     const result: AgentRunResult = { status: 'cancelled', replayedToolUseIds: [], evidence: [], error: 'run cancelled' };
@@ -136,6 +137,13 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     emit('waiting_input', { status: 'waiting_input', message: 'provider credential is unavailable' });
     return result;
   }
+  let validatedBaseUrl: string | undefined;
+  if (dispatch.config.runtime === 'codex' && !baseUrl) {
+    const result: AgentRunResult = { status: 'waiting_input', replayedToolUseIds: [], evidence: [], error: 'Codex API URL is unavailable' };
+    emit('waiting_input', { status: 'waiting_input', message: 'Codex API URL is unavailable' });
+    return result;
+  }
+  if (baseUrl) validatedBaseUrl = validateProviderBaseUrl(baseUrl);
   const runtimeConfig = dispatch.config as RuntimeConfigWithLocalPolicy;
   const configuredSkills = runtimeConfig.localPolicy?.enabledSkills ?? runtimeConfig.enabledSkills ?? [];
   if (!Array.isArray(configuredSkills) || configuredSkills.some(skill => typeof skill !== 'string')) {
@@ -162,6 +170,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     runtime: dispatch.config.runtime,
     credentialRef: dispatch.config.credentialRef,
     ...(dispatch.config.modelRef ? { modelRef: dispatch.config.modelRef } : {}),
+    ...(validatedBaseUrl ? { baseUrl: validatedBaseUrl } : {}),
     cwd: dispatch.config.workspacePath,
     workspace: dispatch.config.workspacePath,
     timeoutMs: dispatch.config.timeoutMs,
@@ -201,6 +210,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     runtime: dispatch.config.runtime,
     credentialRef: dispatch.config.credentialRef,
     ...(dispatch.config.modelRef ? { modelRef: dispatch.config.modelRef } : {}),
+    ...(validatedBaseUrl ? { baseUrl: validatedBaseUrl } : {}),
     workspacePath: dispatch.config.workspacePath,
     allowedTools: dispatch.config.allowedTools,
     timeoutMs: dispatch.config.timeoutMs,

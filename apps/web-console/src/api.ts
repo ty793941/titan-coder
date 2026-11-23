@@ -198,6 +198,10 @@ export function createConsoleApi(base = "") {
         csrfToken,
         true,
       ),
+    saveProviderUrl: (provider: Provider, url: string, csrfToken: string) =>
+      localPost<{ configured: boolean; credentialRef: string }>(
+        "/provider-url", { provider, url }, csrfToken, true,
+      ),
     daemon: (action: "start" | "stop", csrfToken: string) =>
       localPost<{ running: boolean; daemonId?: string }>(
         `/daemon/${action}`,

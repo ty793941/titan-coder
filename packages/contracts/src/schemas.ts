@@ -39,6 +39,7 @@ export const executionConfigSchema = z.object({
   daemonId: identifier,
   runtime: z.enum(['codex', 'qwen']),
   credentialRef: identifier,
+  baseUrlRef: identifier.optional(),
   modelRef: identifier.optional(),
   workspacePath: z.string().min(1).max(4096),
   allowedTools: z.array(identifier).max(100),

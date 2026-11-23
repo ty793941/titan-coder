@@ -20,3 +20,11 @@ export async function resolveCredential(credentialRef: string): Promise<string |
     return undefined;
   }
 }
+
+export function validateProviderBaseUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw new Error('INVALID_PROVIDER_BASE_URL'); }
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  if (!['https:', ...(local ? ['http:'] : [])].includes(url.protocol) || url.username || url.password || url.hash || url.search || url.pathname.length > 4096) throw new Error('INVALID_PROVIDER_BASE_URL');
+  return url.href.replace(/\/$/, '');
+}

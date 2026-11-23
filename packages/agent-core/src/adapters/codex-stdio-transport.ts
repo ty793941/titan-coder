@@ -79,7 +79,10 @@ export class CodexStdioTransport implements CodexTransport {
 
   async create(config: RuntimeSessionConfig): Promise<{ id: string }> {
     if (config.runtime !== 'codex') throw providerError('Codex', 'runtime mismatch');
-    if (config.baseUrl) throw providerError('Codex', 'custom baseUrl is unsupported by this official API-key adapter');
+    if (config.baseUrl) {
+      try { const url = new URL(config.baseUrl); if (!['https:', 'http:'].includes(url.protocol)) throw new Error(); }
+      catch { throw providerError('Codex', 'custom baseUrl is invalid'); }
+    }
     if (config.budget?.maxOutputTokens !== undefined) throw providerError('Codex', 'maxOutputTokens is unsupported by App Server');
     const cwd = config.cwd ?? config.workspace ?? process.cwd();
     if (!isAbsolute(cwd)) throw providerError('Codex', 'cwd must be absolute');
@@ -98,6 +101,14 @@ export class CodexStdioTransport implements CodexTransport {
         '-c', 'shell_environment_policy.inherit="none"',
         '-c', 'features.shell_tool=false',
         '-c', 'tools.view_image=false',
+        ...(config.baseUrl ? [
+          '-c', `model_providers.titan.name=${JSON.stringify('Titan Responses')}`,
+          '-c', `model_providers.titan.base_url=${JSON.stringify(config.baseUrl)}`,
+          '-c', 'model_providers.titan.wire_api="responses"',
+          '-c', 'model_providers.titan.env_key="OPENAI_API_KEY"',
+          '-c', 'model_providers.titan.requires_openai_auth=true',
+          '-c', 'model_provider="titan"',
+        ] : []),
       ], cwd, home, timeoutMs,
       message => { if (state) this.onMessage(state, message); },
       error => {

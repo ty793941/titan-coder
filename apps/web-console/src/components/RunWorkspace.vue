@@ -82,7 +82,7 @@ const blocker = computed(() =>
     props.task.stage,
     props.artifacts,
     daemonOnline.value,
-    !!credential.value?.configured,
+    !!credential.value?.configured && (runtime.value !== "codex" || !!credential.value?.baseUrlConfigured),
   ),
 );
 const selectedSessionCredential = computed(() =>
@@ -109,12 +109,14 @@ const existingBlocker = computed(() => {
     selectedSessionCredential.value?.credentialRef
   )
     return "此 Session 使用了其他凭证引用，请创建使用当前本机 Key 的新 Session。";
+  if (selectedSession.value.execution.runtime === "codex" && !selectedSession.value.execution.baseUrlRef)
+    return "此 Session 没有绑定 Codex API URL，请创建新的 Session。";
   const daemon = selectedSessionDaemon.value;
   return runBlocker(
     props.task.stage,
     props.artifacts,
     !!daemon && !["offline", "disconnected", "revoked"].includes(daemon.status),
-    !!selectedSessionCredential.value?.configured,
+    !!selectedSessionCredential.value?.configured && (selectedSession.value.execution.runtime !== "codex" || !!selectedSessionCredential.value?.baseUrlConfigured),
   );
 });
 watch(
@@ -182,6 +184,7 @@ async function createSession() {
         daemonId: daemonId.value,
         runtime: runtime.value,
         credentialRef: credential.value!.credentialRef,
+        ...(runtime.value === "codex" && credential.value?.baseUrlRef ? { baseUrlRef: credential.value.baseUrlRef } : {}),
         ...(model.value.trim() ? { modelRef: model.value.trim() } : {}),
         workspacePath: workspace.value.trim(),
         allowedTools: [

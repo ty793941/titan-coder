@@ -10,6 +10,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ changed: []; notify: [message: string] }>();
 const key = ref("");
+const baseUrl = ref("");
 const busy = ref(false);
 const error = ref("");
 const isQwen = computed(() => props.provider === "qwen");
@@ -33,6 +34,19 @@ async function save() {
   } finally {
     busy.value = false;
   }
+}
+async function saveBaseUrl() {
+  if (busy.value || isQwen.value || !baseUrl.value.trim() || !props.csrfToken) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await api.saveProviderUrl(props.provider, baseUrl.value.trim(), props.csrfToken);
+    baseUrl.value = "";
+    emit("changed");
+    emit("notify", "Codex API URL 已保存到本机密钥链。");
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : "API URL 保存失败。";
+  } finally { busy.value = false; }
 }
 onBeforeUnmount(() => {
   key.value = "";
@@ -65,6 +79,13 @@ onBeforeUnmount(() => {
       }}
     </p>
     <form @submit.prevent="save">
+      <template v-if="!isQwen">
+        <label :for="`base-url-${provider}`">Responses API URL <LockKeyhole :size="13" /></label>
+        <input :id="`base-url-${provider}`" v-model="baseUrl" type="url" autocomplete="off" spellcheck="false" :disabled="busy" placeholder="https://api.example.com/v1" maxlength="4096" />
+        <p class="field-help">必须兼容 OpenAI Responses API；本机 HTTP 仅允许 localhost。</p>
+        <button class="button full-width" type="button" :disabled="busy || !baseUrl.trim() || !csrfToken" @click="saveBaseUrl">保存 Codex API URL</button>
+        <div class="credential-reference"><span>URL 状态</span><code>{{ credential?.baseUrlConfigured ? "已配置" : "待配置" }}</code></div>
+      </template>
       <label :for="`key-${provider}`">API Key <LockKeyhole :size="13" /></label>
       <input
         :id="`key-${provider}`"

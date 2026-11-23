@@ -57,6 +57,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/start') {
     if (!loggedIn || p.approvalPolicy !== 'never' || p.sandbox !== 'read-only' || p.cwd !== process.cwd() || p.ephemeral !== false) return fail();
+    if (mode === 'custom-provider' && (!process.argv.includes('model_providers.titan.base_url="https://proxy.example/v1"') || !process.argv.includes('model_providers.titan.wire_api="responses"') || !process.argv.includes('model_provider="titan"'))) return fail();
     thread = 'thread-' + process.pid;
     return ok({ thread: { id: thread } });
   }
@@ -98,14 +99,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 const sessions: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(sessions.splice(0).map(close => close())); });
 
-async function fixture(mode = 'normal', timeoutMs = 1000) {
+async function fixture(mode = 'normal', timeoutMs = 1000, baseUrl?: string) {
   const adapter = createCodexApiKeyAdapter({
     apiKey: async (ref: string) => { expect(ref).toBe('secret://codex'); return 'secret-test-key'; },
     executable: process.execPath,
     args: ['-e', serverScript, mode],
     timeoutMs,
   });
-  const session = await adapter.createSession({ runtime: 'codex', credentialRef: 'secret://codex', modelRef: 'codex-test', cwd: process.cwd(), ...(mode === 'tool' || mode === 'unknown-tool' ? { tools: [{ name: 'lookup', description: 'Lookup', inputSchema: { type: 'object' } }] } : {}) });
+  const session = await adapter.createSession({ runtime: 'codex', credentialRef: 'secret://codex', modelRef: 'codex-test', cwd: process.cwd(), ...(baseUrl ? { baseUrl } : {}), ...(mode === 'tool' || mode === 'unknown-tool' ? { tools: [{ name: 'lookup', description: 'Lookup', inputSchema: { type: 'object' } }] } : {}) });
   sessions.push(() => adapter.close(session));
   return { adapter, session };
 }
@@ -115,6 +116,12 @@ describe('Codex App Server stdio provider', () => {
     expect(codexToolName('artifact.write')).toBe('artifact_write');
     expect(platformToolName('artifact_write')).toBe('artifact.write');
     expect(codexToolName('workspace-read')).toBe('workspace-read');
+  });
+
+  it('passes a custom Responses provider configuration to Codex App Server', async () => {
+    const { adapter, session } = await fixture('custom-provider', 1000, 'https://proxy.example/v1');
+    expect(session.runtime).toBe('codex');
+    await adapter.close(session);
   });
 
   it('initializes, logs in with an in-memory key, and sends actual input with independent threads', async () => {

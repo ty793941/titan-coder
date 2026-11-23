@@ -2,6 +2,7 @@ export type ExecutionConfig = {
   daemonId: string;
   runtime: 'codex' | 'qwen';
   credentialRef: string;
+  baseUrlRef?: string;
   modelRef?: string;
   workspacePath: string;
   allowedTools: string[];

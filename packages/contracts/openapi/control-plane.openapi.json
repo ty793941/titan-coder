@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-22T13:17:23.885Z"
+    "generatedAt": "2026-11-23T12:53:51.190Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -2043,6 +2043,12 @@
             "maxLength": 200,
             "description": "本机凭证引用；只允许引用，不允许模型 API Key 明文。"
           },
+          "baseUrlRef": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
           "modelRef": {
             "type": "string",
             "x-trim": true,
@@ -3417,6 +3423,12 @@
               "codex",
               "qwen"
             ]
+          },
+          "baseUrlRef": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
           },
           "modelRef": {
             "type": "string",
