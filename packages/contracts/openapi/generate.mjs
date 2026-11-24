@@ -201,8 +201,8 @@ operation('get', '/api/sessions/{sessionId}', 'getSession', '查询 Session', { 
 create('/api/sessions/{sessionId}/runs', 'Run', 'RunCreateRequest', 'Run', '创建新的 Run attempt；恢复使用同一 Session 的 checkpointId，旧 Run 保留。');
 operation('get', '/api/runs/{runId}', 'getRun', '查询 Run', { responses: { '200': response('Run 当前状态。', ref('Run')) } });
 operation('post', '/api/runs/{runId}/pause', 'pauseRun', '暂停 Run 并请求停止执行', {
-  description: '同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。',
-  responses: { '200': response('原 Run 的 paused 业务视图，不创建新 attempt。', ref('Run')) },
+  description: '仅 local Run 支持暂停：同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。cloud Run 在 Console Bearer 认证后始终返回 403 PERMISSION_DENIED，details.reason=CLOUD_PAUSE_UNSUPPORTED，不改变执行状态；需要停止云端执行时使用 cancel。',
+  responses: { '200': response('原 local Run 的 paused 业务视图，不创建新 attempt。', ref('Run')), '403': response('cloud pause 返回 PERMISSION_DENIED，details.reason=CLOUD_PAUSE_UNSUPPORTED，retryable=false；不修改 Run、Session、Job、cloud execution、租约、Handoff 或事件。', ref('ApiError')) },
 });
 operation('post', '/api/runs/{runId}/resume', 'resumeRun', '从 paused Run 创建新尝试', {
   body: 'RunCreateRequest', bodyRequired: false, idempotency: true,
@@ -271,7 +271,7 @@ for (const action of ['pause', 'resume', 'cancel']) {
 paths['/api/daemons/{daemonId}/runs/{runId}/control'].get.description += ' cloud同时续期job和cloud_execution的120秒租约；任一过期或Daemon失联则隔离为blocked并持久标记reconnecting，停止信号为true。Secret Lease固定有效期不续期。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud还要求daemonStatus=ready；认证及领取证明有效但心跳失联时，即使执行租约未过期也拒收progress，先提交blocked/reconnecting、清除领取证明和租约、撤销Secret Lease及Outbox事实，再返回403 PERMISSION_DENIED，不续租、不完成Run。local保持既有行为。';
-paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.description += ' 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；旧Run再次paused不能绕过此校验，失败返回400 HANDOFF_CHECKPOINT_INVALID。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。';
+paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.description += ' 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；源Session/Run仍须paused且checkpoint未变，旧Run再次paused不能绕过此校验。源状态或checkpoint失效时，先原子持久化Handoff failed、errorCode=HANDOFF_CHECKPOINT_INVALID、completedAt、version递增和handoff.failed Outbox事件，释放active Handoff并从pending移除，再返回400 HANDOFF_CHECKPOINT_INVALID、retryable=false；后续ACK返回409且不重复失败事件。目标暂不可用返回409 HANDOFF_TARGET_UNAVAILABLE、retryable=true，保留requested、版本和pending供重试。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。';
 paths['/api/artifacts/{artifactId}/content'].get.description += ' cloud工件仅允许创建来源为所属Daemon、关联真实cloud_execution的记录；宿主根从该Daemon唯一workspaceRoot推导到sessionId/session，读取时校验realpath仍为该根下精确Session目录，拒绝Session目录及工件目录符号链接逃逸。宿主文件需由Executor在容器退出后保留，CP不调用Docker。';
 

@@ -132,7 +132,9 @@ export class RunsService {
     await this.database.db.transaction().execute(async trx => {
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
       if (!run) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} was not found`);
-      await this.authorizeCloudRun(trx, run.session_id, authorization);
+      if (await this.authorizeCloudRun(trx, run.session_id, authorization)) {
+        throw new DomainError('PERMISSION_DENIED', 'CLOUD_PAUSE_UNSUPPORTED: cloud runs do not support pause; cancel the execution instead', { reason: 'CLOUD_PAUSE_UNSUPPORTED' });
+      }
       const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).forUpdate().executeTakeFirst();
       if (run.status === 'paused') {
         if (job && (!job.cancel_requested || job.status !== 'paused')) {
@@ -173,9 +175,10 @@ export class RunsService {
     return this.get(runId);
   }
 
-  private async authorizeCloudRun(trx: Transaction<Database>, sessionId: string, authorization?: string): Promise<void> {
+  private async authorizeCloudRun(trx: Transaction<Database>, sessionId: string, authorization?: string): Promise<boolean> {
     const session = await trx.selectFrom('session').select('environment_type').where('id', '=', sessionId).executeTakeFirstOrThrow();
     if (session.environment_type === 'cloud') authenticateConsole(authorization);
+    return session.environment_type === 'cloud';
   }
 
   async fail(runId: string, errorCode: string): Promise<void> {

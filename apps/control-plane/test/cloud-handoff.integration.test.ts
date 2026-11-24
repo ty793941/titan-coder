@@ -133,20 +133,48 @@ describe('bounded cloud control plane', () => {
     expect((await api.get(`/api/runs/${run.id}`).expect(200)).body.status).toBe('completed');
   });
 
-  it.each(['running', 'paused'])('rejects an old snapshot ACK after a newer source attempt is %s and the old run is paused again', async status => {
+  it.each(['running', 'paused'])('fails an old handoff after a newer source attempt is %s and the old run is paused again', async status => {
     const f = await fixture();
     const { handoff } = await requested(f);
     const run = (await api.post(`/api/runs/${f.run.id}/resume`).send({ idempotencyKey: randomUUID() }).expect(201)).body;
     const dispatch = (await api.post(`/api/daemons/${f.source.daemonId}/claim`).set('Authorization', auth(f.source.authToken)).send({}).expect(200)).body;
     await api.post(`/api/daemons/${f.source.daemonId}/runs/${run.id}/progress`).set('Authorization', auth(f.source.authToken)).send({ claimToken: dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'running', payload: {} }).expect(200);
-    if (status === 'paused') await api.post(`/api/runs/${run.id}/pause`).expect(200);
+    const checkpoint = { ...f.checkpoint, id: `cp_${randomUUID()}` };
+    if (status === 'paused') {
+      await api.post(`/api/daemons/${f.source.daemonId}/runs/${run.id}/progress`).set('Authorization', auth(f.source.authToken)).send({ claimToken: dispatch.claimToken, eventId: randomUUID(), sequence: 2, type: 'checkpoint', payload: {}, checkpoint }).expect(200);
+      await api.post(`/api/runs/${run.id}/pause`).expect(200);
+    }
     await api.post(`/api/runs/${f.run.id}/pause`).expect(200);
     // 旧 Run 的暂停可能使 Session 投影为 paused，不能据此认可旧的停止声明。
     await api.db.updateTable('session').set({ status: 'paused' }).where('id', '=', f.session.id).execute();
     const response = await api.post(`/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`).set('Authorization', auth(f.source.authToken)).send({ manifest: manifest(), stopped: true }).expect(400);
-    expect(response.body.code).toBe('HANDOFF_CHECKPOINT_INVALID');
-    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body).toMatchObject({ status: 'requested', targetSessionId: null });
+    expect(response.body).toMatchObject({ code: 'HANDOFF_CHECKPOINT_INVALID', retryable: false });
+    const failed = (await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body;
+    expect(failed).toMatchObject({ status: 'failed', errorCode: 'HANDOFF_CHECKPOINT_INVALID', targetSessionId: null, version: handoff.version + 1 });
+    expect(failed.completedAt).toEqual(expect.any(String));
+    expect((await api.get(`/api/daemons/${f.source.daemonId}/handoffs/pending`).set('Authorization', auth(f.source.authToken)).expect(200)).body.requests).toEqual([]);
+    await api.post(`/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`).set('Authorization', auth(f.source.authToken)).send({ manifest: manifest(), stopped: true }).expect(409);
+    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body).toEqual(failed);
+    const events = await api.db.selectFrom('event').innerJoin('outbox_event', 'event.event_id', 'outbox_event.event_id').select('event.payload').where('event.event_type', '=', 'handoff.failed').where('event.run_id', '=', f.run.id).execute();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({ handoffId: handoff.id, errorCode: 'HANDOFF_CHECKPOINT_INVALID' });
     expect(await api.db.selectFrom('session').select('id').where('parent_session_id', '=', f.session.id).execute()).toEqual([]);
+    if (status === 'paused') {
+      const replacement = await requested({ ...f, run, checkpoint });
+      expect(replacement.handoff).toMatchObject({ status: 'requested', sourceRunId: run.id, checkpointId: checkpoint.id });
+    }
+  });
+
+  it.each(['session', 'run', 'checkpoint'])('persists an invalid checkpoint failure when the source %s no longer matches the stop acknowledgment', async changed => {
+    const f = await fixture();
+    const { handoff } = await requested(f);
+    if (changed === 'session') await api.db.updateTable('session').set({ status: 'running' }).where('id', '=', f.session.id).execute();
+    if (changed === 'run') await api.db.updateTable('run').set({ status: 'running' }).where('id', '=', f.run.id).execute();
+    if (changed === 'checkpoint') await api.db.updateTable('run').set({ checkpoint_id: null }).where('id', '=', f.run.id).execute();
+    const response = await api.post(`/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`).set('Authorization', auth(f.source.authToken)).send({ manifest: manifest(), stopped: true }).expect(400);
+    expect(response.body).toMatchObject({ code: 'HANDOFF_CHECKPOINT_INVALID', retryable: false });
+    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body).toMatchObject({ status: 'failed', errorCode: 'HANDOFF_CHECKPOINT_INVALID', targetSessionId: null });
+    expect((await api.get(`/api/daemons/${f.source.daemonId}/handoffs/pending`).set('Authorization', auth(f.source.authToken)).expect(200)).body.requests).toEqual([]);
   });
 
   it('requires management auth and records only requested until a source daemon acknowledges a snapshot', async () => {
@@ -244,8 +272,9 @@ describe('bounded cloud control plane', () => {
     const path = `/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`;
     const snapshot = manifest();
     const missing = await api.post(path).set('Authorization', auth(f.source.authToken)).send({ manifest: snapshot, stopped: true }).expect(409);
-    expect(missing.body.code).toBe('HANDOFF_TARGET_UNAVAILABLE');
-    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body.status).toBe('requested');
+    expect(missing.body).toMatchObject({ code: 'HANDOFF_TARGET_UNAVAILABLE', retryable: true });
+    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body).toEqual(handoff);
+    expect((await api.get(`/api/daemons/${f.source.daemonId}/handoffs/pending`).set('Authorization', auth(f.source.authToken)).expect(200)).body.requests).toEqual([expect.objectContaining({ id: handoff.id })]);
     await api.db.updateTable('daemon').set({ capabilities: JSON.stringify(cloudCapabilities) }).where('id', '=', f.target.daemonId).execute();
     const responses = await Promise.all([1, 2].map(() => api.post(path).set('Authorization', auth(f.source.authToken)).send({ manifest: snapshot, stopped: true })));
     expect(responses.map(response => response.status)).toEqual([200, 200]);
@@ -313,6 +342,32 @@ describe('bounded cloud control plane', () => {
     for (const action of ['pause', 'cancel', 'resume']) await api.post(`/api/runs/${f.dispatch.runId}/${action}`).send({ idempotencyKey: randomUUID() }).expect(401);
     await api.post(`/api/runs/${f.dispatch.runId}/cancel`).set('Authorization', auth(consoleToken)).send({}).expect(200);
     expect((await api.get(`/api/cloud-executions/${f.dispatch.cloud.executionId}`).set('Authorization', auth(consoleToken)).expect(200)).body.status).toBe('cancelled');
+  });
+
+  it.each(['queued', 'running'])('rejects cloud pause without changing a %s run or its execution and leases', async status => {
+    const f = await ready();
+    const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}`;
+    if (status === 'running') {
+      for (const lifecycle of ['creating', 'starting', 'running']) await api.post(`${path}/cloud`).set('Authorization', auth(f.target.authToken)).send({ claimToken: f.dispatch.claimToken, status: lifecycle, containerId: 'pause_container' }).expect(200);
+      await api.post(`${path}/progress`).set('Authorization', auth(f.target.authToken)).send({ claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'running', payload: {} }).expect(200);
+    }
+    const state = async () => ({
+      run: await api.db.selectFrom('run').selectAll().where('id', '=', f.dispatch.runId).executeTakeFirstOrThrow(),
+      session: await api.db.selectFrom('session').selectAll().where('id', '=', f.dispatch.sessionId).executeTakeFirstOrThrow(),
+      job: await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow(),
+      cloud: await api.db.selectFrom('cloud_execution').selectAll().where('id', '=', f.dispatch.cloud.executionId).executeTakeFirstOrThrow(),
+      lease: await api.db.selectFrom('secret_lease').selectAll().where('id', '=', f.dispatch.cloud.secretLeaseId).executeTakeFirstOrThrow(),
+      handoff: await api.db.selectFrom('session_handoff').selectAll().where('id', '=', f.handoff.id).executeTakeFirstOrThrow(),
+      events: await api.db.selectFrom('event').selectAll().where('run_id', '=', f.dispatch.runId).orderBy('event_id').execute(),
+    });
+    const before = await state();
+    expect(before.run.status).toBe(status);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await api.post(`/api/runs/${f.dispatch.runId}/pause`).set('Authorization', auth(consoleToken)).send({}).expect(403);
+      expect(response.body).toMatchObject({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PAUSE_UNSUPPORTED' }, retryable: false });
+      expect(response.body.message).toContain('CLOUD_PAUSE_UNSUPPORTED');
+      expect(await state()).toEqual(before);
+    }
   });
 
   it('rejects progress and control renewal when only the cloud execution lease expired', async () => {

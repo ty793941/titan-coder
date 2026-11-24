@@ -128,6 +128,21 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(pause.security).toEqual([]);
   });
 
+  it('documents cloud pause refusal before mutation while preserving local pause', () => {
+    const pause = load().paths['/api/runs/{runId}/pause'].post;
+    expect(pause.description).toContain('仅 local');
+    expect(pause.description).toContain('CLOUD_PAUSE_UNSUPPORTED');
+    expect(pause.responses['401']).toBeDefined();
+    expect(pause.responses['403'].content['application/json'].schema).toEqual(ref('ApiError'));
+    for (const detail of ['PERMISSION_DENIED', 'details.reason=CLOUD_PAUSE_UNSUPPORTED', 'retryable=false', '不修改']) expect(pause.responses['403'].description).toContain(detail);
+    expect(pause['x-cloud-security']).toEqual([{ ConsoleBearer: [] }]);
+  });
+
+  it('documents invalid snapshot ACK as a persisted failure and unavailable targets as retryable', () => {
+    const snapshot = load().paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post;
+    for (const detail of ['HANDOFF_CHECKPOINT_INVALID', 'failed', 'completedAt', 'version', 'handoff.failed', 'pending', 'retryable=false', 'HANDOFF_TARGET_UNAVAILABLE', 'requested', 'retryable=true']) expect(snapshot.description).toContain(detail);
+  });
+
   it('freezes authenticated console state, bounded queries and credential-free execution', () => {
     const api = load();
     const operation = api.paths['/api/console/state']?.get;

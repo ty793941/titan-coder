@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { DomainError, executionCheckpointSchema, handoffCreateRequestSchema, handoffFailureRequestSchema, handoffSnapshotRequestSchema, validateExecutionConfig } from '@titan/contracts';
+import type { ErrorCode } from '@titan/contracts';
 import type { Selectable, Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
 import type { Database, SessionHandoffTable } from '../../database/types.js';
@@ -54,7 +55,7 @@ export class HandoffsService {
 
   async snapshot(daemonId: string, id: string, source: unknown) {
     const { manifest } = handoffSnapshotRequestSchema.parse(source);
-    return this.database.db.transaction().execute(async trx => {
+    const result = await this.database.db.transaction().execute(async trx => {
       const handoff = await trx.selectFrom('session_handoff').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
       if (!handoff) throw new DomainError('RESOURCE_NOT_FOUND', 'handoff was not found');
       if (handoff.source_daemon_id !== daemonId) throw new DomainError('PERMISSION_DENIED', 'snapshot must be acknowledged by the source daemon');
@@ -66,9 +67,11 @@ export class HandoffsService {
       const latestRun = await trx.selectFrom('run').select('id').where('session_id', '=', session.id).orderBy('attempt', 'desc').executeTakeFirst();
       const activeRun = await trx.selectFrom('run').select('id').where('session_id', '=', session.id)
         .where('status', 'in', ['queued', 'starting', 'running', 'waiting_input', 'reconnecting']).executeTakeFirst();
-      if (latestRun?.id !== handoff.source_run_id || activeRun) throw new DomainError('HANDOFF_CHECKPOINT_INVALID', 'snapshot requires the latest source run and no active execution');
       const run = await trx.selectFrom('run').selectAll().where('id', '=', handoff.source_run_id).forUpdate().executeTakeFirstOrThrow();
-      if (session.status !== 'paused' || run.status !== 'paused' || run.checkpoint_id !== handoff.checkpoint_id) throw new DomainError('HANDOFF_CHECKPOINT_INVALID', 'source session must remain paused at the acknowledged checkpoint');
+      if (latestRun?.id !== handoff.source_run_id || activeRun || session.status !== 'paused' || run.status !== 'paused' || run.checkpoint_id !== handoff.checkpoint_id) {
+        await this.persistFailure(trx, handoff, daemonId, 'HANDOFF_CHECKPOINT_INVALID');
+        return new DomainError('HANDOFF_CHECKPOINT_INVALID', 'snapshot requires the latest paused source run at its acknowledged checkpoint and no active execution');
+      }
       const config = validateExecutionConfig(session.execution_config);
       if (config.daemonId !== daemonId) throw new DomainError('PERMISSION_DENIED', 'source daemon changed');
       await validateExecution(trx, config);
@@ -98,6 +101,9 @@ export class HandoffsService {
       await this.events.append(trx, { ...context, eventType: 'handoff.created', runId, payload: { handoffId: handoff.id, executionId, sourceSessionId: session.id, targetSessionId: targetId, sourceCheckpointId: saved.id, checkpointId, snapshotId: manifest.snapshotId, stopped: true } });
       return view(updated);
     });
+    // 先提交终态和事件，再返回不可重试错误，避免抛错回滚失败记录。
+    if (result instanceof DomainError) throw result;
+    return result;
   }
 
   async failure(daemonId: string, id: string, source: unknown) {
@@ -111,11 +117,15 @@ export class HandoffsService {
         return view(handoff);
       }
       if (handoff.status !== 'requested' || handoff.target_session_id) throw new DomainError('INVALID_STATE_TRANSITION', 'source failure can only close a requested handoff without a target');
-      const updated = await trx.updateTable('session_handoff').set({ status: 'failed', error_code: input.errorCode, completed_at: new Date(), version: handoff.version + 1 }).where('id', '=', handoff.id).where('version', '=', handoff.version).returningAll().executeTakeFirstOrThrow();
-      const task = await trx.selectFrom('task').select('project_id').where('id', '=', handoff.task_id).executeTakeFirstOrThrow();
-      await this.events.append(trx, { eventType: 'handoff.failed', projectId: task.project_id, taskId: handoff.task_id, sessionId: handoff.source_session_id, runId: handoff.source_run_id, actor: { type: 'daemon', id: daemonId }, payload: { handoffId: id, errorCode: input.errorCode } });
-      return view(updated);
+      return this.persistFailure(trx, handoff, daemonId, input.errorCode);
     });
+  }
+
+  private async persistFailure(trx: Transaction<Database>, handoff: Selectable<SessionHandoffTable>, daemonId: string, errorCode: ErrorCode) {
+    const updated = await trx.updateTable('session_handoff').set({ status: 'failed', error_code: errorCode, completed_at: new Date(), version: handoff.version + 1 }).where('id', '=', handoff.id).where('version', '=', handoff.version).returningAll().executeTakeFirstOrThrow();
+    const task = await trx.selectFrom('task').select('project_id').where('id', '=', handoff.task_id).executeTakeFirstOrThrow();
+    await this.events.append(trx, { eventType: 'handoff.failed', projectId: task.project_id, taskId: handoff.task_id, sessionId: handoff.source_session_id, runId: handoff.source_run_id, actor: { type: 'daemon', id: daemonId }, payload: { handoffId: handoff.id, errorCode } });
+    return view(updated);
   }
 
   private async selectTarget(trx: Transaction<Database>, runtime: string) {

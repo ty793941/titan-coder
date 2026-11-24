@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T03:37:38.473Z"
+    "generatedAt": "2026-11-24T06:15:13.306Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -502,7 +502,7 @@
       "post": {
         "operationId": "pauseRun",
         "summary": "暂停 Run 并请求停止执行",
-        "description": "同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。",
+        "description": "仅 local Run 支持暂停：同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。cloud Run 在 Console Bearer 认证后始终返回 403 PERMISSION_DENIED，details.reason=CLOUD_PAUSE_UNSUPPORTED，不改变执行状态；需要停止云端执行时使用 cancel。 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。",
         "security": [],
         "parameters": [
           {
@@ -520,7 +520,7 @@
         ],
         "responses": {
           "200": {
-            "description": "原 Run 的 paused 业务视图，不创建新 attempt。",
+            "description": "原 local Run 的 paused 业务视图，不创建新 attempt。",
             "content": {
               "application/json": {
                 "schema": {
@@ -534,6 +534,16 @@
           },
           "401": {
             "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "description": "cloud pause 返回 PERMISSION_DENIED，details.reason=CLOUD_PAUSE_UNSUPPORTED，retryable=false；不修改 Run、Session、Job、cloud execution、租约、Handoff 或事件。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           },
           "404": {
             "$ref": "#/components/responses/Error"
@@ -2009,7 +2019,7 @@
       "post": {
         "operationId": "acknowledgeHandoffSnapshot",
         "summary": "确认停止并登记 Snapshot 清单",
-        "description": "stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；旧Run再次paused不能绕过此校验，失败返回400 HANDOFF_CHECKPOINT_INVALID。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。",
+        "description": "stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；源Session/Run仍须paused且checkpoint未变，旧Run再次paused不能绕过此校验。源状态或checkpoint失效时，先原子持久化Handoff failed、errorCode=HANDOFF_CHECKPOINT_INVALID、completedAt、version递增和handoff.failed Outbox事件，释放active Handoff并从pending移除，再返回400 HANDOFF_CHECKPOINT_INVALID、retryable=false；后续ACK返回409且不重复失败事件。目标暂不可用返回409 HANDOFF_TARGET_UNAVAILABLE、retryable=true，保留requested、版本和pending供重试。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。",
         "security": [
           {
             "DaemonBearer": []
