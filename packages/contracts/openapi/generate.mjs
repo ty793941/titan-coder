@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import * as source from '../dist/schemas.js';
+import * as orchestration from '../dist/orchestration.js';
 import { errorCodes } from '../dist/errors.js';
 
 // 仅用于离线协议工件生成，不注册运行时路由；新增 Zod 类型必须显式支持。
@@ -14,6 +15,7 @@ function jsonSchema(schema) {
     case 'ZodBoolean': return { type: 'boolean' };
     case 'ZodLiteral': return { type: typeof def.value, const: def.value };
     case 'ZodEnum': return { type: 'string', enum: def.values };
+    case 'ZodDiscriminatedUnion': return { oneOf: def.options.map(jsonSchema), discriminator: { propertyName: def.discriminator } };
     case 'ZodString': {
       const result = { type: 'string' };
       for (const check of def.checks) {
@@ -87,6 +89,21 @@ const schemas = Object.fromEntries(Object.entries({
   DaemonEventRequest: source.daemonEventSchema,
   Artifact: source.artifactSchema,
   EventEnvelope: source.eventEnvelopeSchema,
+  BackgroundJobCreateRequest: orchestration.backgroundJobCreateRequestSchema,
+  BackgroundJob: orchestration.backgroundJobSchema,
+  JobObservation: orchestration.jobObservationSchema,
+  ScheduleCreateRequest: orchestration.scheduleCreateRequestSchema,
+  ScheduleUpdateRequest: orchestration.scheduleUpdateRequestSchema,
+  ScheduleVersionRequest: orchestration.scheduleVersionRequestSchema,
+  Schedule: orchestration.scheduleSchema,
+  ScheduleOccurrenceRequest: orchestration.scheduleOccurrenceRequestSchema,
+  ScheduleOccurrenceResult: orchestration.scheduleOccurrenceResultSchema,
+  WorkflowCommand: orchestration.workflowCommandSchema,
+  WorkflowClaimRequest: orchestration.workflowClaimRequestSchema,
+  WorkflowCompleteRequest: orchestration.workflowCompleteRequestSchema,
+  WorkflowRetryRequest: orchestration.workflowRetryRequestSchema,
+  WorkflowCancelRequest: orchestration.workflowCancelRequestSchema,
+  OrchestrationEmptyRequest: orchestration.orchestrationEmptyRequestSchema,
 }).map(([key, value]) => [key, jsonSchema(value)]));
 
 schemas.SessionCreateRequest.properties.execution = ref('ExecutionConfig');
@@ -171,6 +188,18 @@ schemas.ConsoleState = object({
 });
 schemas.ArtifactContent = object({ content: text, format: { type: 'string', enum: ['markdown', 'json', 'text'] },
   checksum: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, bytes: { type: 'integer', minimum: 0, maximum: 2097152 } });
+schemas.BackgroundJobCreateRequest.oneOf = [
+  { properties: { kind: { const: 'run' } }, not: { required: ['runId'] } },
+  { properties: { kind: { const: 'observe' } }, required: ['runId'] },
+];
+schemas.BackgroundJobCreateRequest.description = '显式runInBackground=true。run仅接受具备最新批准计划与执行配置的local Session；observe必须指定同Session既有Run，允许local/cloud，仅追踪该Run，不创建新attempt或凭证租约。deadlineAt必须为未来24小时内UTC时间；创建只持久化pending_dispatch与start_job命令，不提前创建execution_job。幂等键按Session隔离，同键异正文409。';
+for (const name of ['ScheduleCreateRequest', 'ScheduleUpdateRequest', 'Schedule']) {
+  schemas[name].oneOf = [{ required: ['cron'], not: { required: ['intervalSeconds'] } }, { required: ['intervalSeconds'], not: { required: ['cron'] } }];
+  schemas[name].properties.timezone['x-validation'] = 'IANA timezone accepted by Intl.DateTimeFormat';
+  schemas[name].properties.cron['x-validation'] = 'exactly five numeric cron fields; each field permits *, numeric range/list and positive step within its range';
+  schemas[name].description = 'cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。';
+}
+schemas.JobObservation.description = 'Temporal可接收的最小业务观察，严格字段白名单；errorCode仅允许固定平台错误码，禁止错误正文、Prompt、凭证、URL及Checkpoint。paused Run映射waiting_input；不会自动重执行或复用cloud租约。';
 
 const json = schema => ({ 'application/json': { schema } });
 const response = (description, schema) => ({ description, ...(schema ? { content: json(schema) } : {}) });
@@ -186,7 +215,7 @@ function operation(method, path, operationId, summary, options = {}) {
   paths[path] ??= {};
   paths[path][method] = {
     operationId, summary, description: options.description ?? summary,
-    security: options.auth === 'console' ? [{ ConsoleBearer: [] }] : options.auth ? [{ DaemonBearer: [] }] : [], parameters,
+    security: options.auth === 'console' ? [{ ConsoleBearer: [] }] : options.auth === 'workflow' ? [{ WorkflowBearer: [] }] : options.auth ? [{ DaemonBearer: [] }] : [], parameters,
     ...(options.body ? { requestBody: { required: options.bodyRequired !== false, content: json(ref(options.body)) } } : {}),
     responses,
     ...(options.idempotency !== undefined ? { 'x-idempotency-required': options.idempotency } : {}),
@@ -283,6 +312,27 @@ paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.description += ' �
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。';
 paths['/api/artifacts/{artifactId}/content'].get.description += ' cloud工件仅允许创建来源为所属Daemon、关联真实cloud_execution的记录；宿主根从该Daemon唯一workspaceRoot推导到sessionId/session，读取时校验realpath仍为该根下精确Session目录，拒绝Session目录及工件目录符号链接逃逸。宿主文件需由Executor在容器退出后保留，CP不调用Docker。';
 
+const pageParameters = [
+  { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+  { name: 'offset', in: 'query', required: false, schema: { type: 'integer', minimum: 0, maximum: 1000000, default: 0 } },
+];
+operation('post', '/api/sessions/{id}/background-jobs', 'createBackgroundJob', '创建已授权后台任务', { auth: 'console', body: 'BackgroundJobCreateRequest', responses: { '201': response('已持久化pending_dispatch；同键同正文重放同一任务。', ref('BackgroundJob')) } });
+operation('get', '/api/sessions/{id}/background-jobs', 'listBackgroundJobs', '分页读取同Session后台任务', { auth: 'console', parameters: pageParameters, description: '仅同Session，createdAt倒序、id升序，默认50最多100，offset最多1000000；拒绝未知query字段。', responses: { '200': response('安全后台任务数组。', array(ref('BackgroundJob'))) } });
+operation('get', '/api/background-jobs/{id}', 'getBackgroundJob', '读取后台任务', { auth: 'console', responses: { '200': response('业务任务及当前Run观察。', ref('BackgroundJob')) } });
+operation('post', '/api/background-jobs/{id}/cancel', 'cancelBackgroundJob', '持久化后台任务取消意图', { auth: 'console', body: 'OrchestrationEmptyRequest', description: '原子记录取消意图并取消同一Run、执行队列与cloud租约，重复保持终态；迟到dispatch不能创建Run。响应不证明进程或容器已退出。', responses: { '200': response('当前后台任务业务状态。', ref('BackgroundJob')) } });
+operation('post', '/api/sessions/{id}/schedules', 'createExecutionSchedule', '创建默认禁用的有限次数调度', { auth: 'console', body: 'ScheduleCreateRequest', responses: { '201': response('enabled=false、pending_sync；同键同正文重放。', ref('Schedule')) } });
+operation('get', '/api/sessions/{id}/schedules', 'listExecutionSchedules', '分页读取Session调度', { auth: 'console', parameters: pageParameters, responses: { '200': response('同Session安全调度定义数组。', array(ref('Schedule'))) } });
+operation('get', '/api/schedules/{id}', 'getExecutionSchedule', '读取安全调度定义', { auth: 'console', responses: { '200': response('不含执行配置、宿主路径或凭证。', ref('Schedule')) } });
+for (const action of ['update', 'enable', 'pause']) operation('post', `/api/schedules/{id}/${action}`, `${action}ExecutionSchedule`, `${action}调度定义`, { auth: 'console', body: action === 'update' ? 'ScheduleUpdateRequest' : 'ScheduleVersionRequest', description: 'expectedVersion精确匹配才变更，version加一并原子写sync_schedule命令，ACK当前版本前保持pending_sync；旧版本ACK不能覆盖新定义。update传完整时间/授权定义并保留enabled和已用次数，暂停不取消既有Run。', responses: { '200': response('新版本安全调度定义。', ref('Schedule')) } });
+operation('post', '/api/internal/workflow/commands/claim', 'claimWorkflowCommand', '领取Workflow命令投递租约', { auth: 'workflow', body: 'WorkflowClaimRequest', description: 'workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。', responses: { '200': response('固定格式安全命令。', ref('WorkflowCommand')), '204': response('当前没有可领取命令，无正文。') } });
+operation('post', '/api/internal/workflow/commands/{id}/complete', 'completeWorkflowCommand', '确认当前投递租约', { auth: 'workflow', body: 'WorkflowCompleteRequest', description: '仅同worker与当前未到期claimToken可ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。', responses: { '204': response('投递已确认，无正文。') } });
+operation('post', '/api/internal/workflow/commands/{id}/retry', 'retryWorkflowCommand', '有限退避或停止重试', { auth: 'workflow', body: 'WorkflowRetryRequest', description: '有效租约内retryable=true退避1秒指数增长、最多300秒、最多10次；永久错误或耗尽转failed。只保存固定errorCode。', responses: { '204': response('重试或失败状态已保存，无正文。') } });
+operation('get', '/api/internal/workflow/jobs/{id}', 'observeWorkflowJob', '观察同一业务Run', { auth: 'workflow', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
+operation('post', '/api/internal/workflow/jobs/{id}/dispatch', 'dispatchWorkflowJob', '幂等原子派发业务任务', { auth: 'workflow', body: 'OrchestrationEmptyRequest', description: '同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
+operation('post', '/api/internal/workflow/jobs/{id}/cancel', 'cancelWorkflowJob', '按持久截止时间取消业务任务', { auth: 'workflow', body: 'WorkflowCancelRequest', description: 'reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
+operation('get', '/api/internal/workflow/schedules/{id}', 'getWorkflowSchedule', '读取安全Schedule定义', { auth: 'workflow', responses: { '200': response('安全定义，仅用于同步Temporal Schedule。', ref('Schedule')) } });
+operation('post', '/api/internal/workflow/schedules/{id}/occurrences', 'admitScheduleOccurrence', '原子接纳稳定触发', { auth: 'workflow', body: 'ScheduleOccurrenceRequest', description: 'occurrenceId为稳定Temporal Workflow ID且全局唯一，同ID异定义409；同Schedule/版本/计划时间不会重复接纳。同触发重试返回相同结果，创建Job绑定occurrenceId且不再投递start_job命令；不会提前创建execution_job或消耗maxRuns。', responses: { '200': response('created与jobId或skipped。', ref('ScheduleOccurrenceResult')) } });
+
 const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
   info: { title: 'Titan Control Plane', version: '1.2.0', description: 'HTTP/JSON + SSE 契约，包含本机执行及有界云端Handoff控制面。Snapshot实际导出、Secret解析及容器执行由宿主Daemon负责，不提供原生模型进程热迁移。认证覆盖以各操作security为准。' },
@@ -294,6 +344,7 @@ const api = {
     securitySchemes: {
       DaemonBearer: { type: 'http', scheme: 'bearer', bearerFormat: '64 lowercase hexadecimal characters', description: 'Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。' },
       ConsoleBearer: { type: 'http', scheme: 'bearer', description: 'Authorization: Bearer <TITAN_CONSOLE_TOKEN>；用于控制台、工件正文、Handoff和Cloud管理。由本机服务端环境配置，未设置时拒绝访问；不是模型API Key。' },
+      WorkflowBearer: { type: 'http', scheme: 'bearer', description: '独立Workflow服务身份，仅用于/api/internal/workflow；绑定workerId，凭证通过Keychain引用或受控stdin加载至内存，拒绝Console/Daemon凭证复用，未配置时拒绝访问。环境仅允许非Secret的credentialRef与workerId，禁止明文Token。' },
     },
     parameters: {
       IdempotencyKey: { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', minLength: 1, maxLength: 200 }, description: 'Project/Task/Session/Run 创建及 Run resume 可改用正文 idempotencyKey，请求头优先；trim 后校验长度，不是 Daemon 事件去重键。' },

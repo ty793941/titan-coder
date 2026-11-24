@@ -4,14 +4,19 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module.js';
 import { HttpErrorFilter } from './common/http-error.filter.js';
 import { DatabaseService } from './database/database.service.js';
+import { WorkflowAuth, type WorkflowIdentityConfig, type WorkflowCredentialResolver } from './common/workflow-auth.js';
 
-export async function createApp(): Promise<NestFastifyApplication> {
+export async function createApp(options: { workflowIdentity?: WorkflowIdentityConfig; resolveWorkflowCredential?: WorkflowCredentialResolver } = {}): Promise<NestFastifyApplication> {
   const adapter = new FastifyAdapter();
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     logger: process.env.CONTROL_PLANE_LOG === 'debug' ? ['log', 'error', 'warn'] : false,
   });
   app.useGlobalFilters(new HttpErrorFilter());
+  const identity = options.workflowIdentity ?? (process.env.TITAN_WORKFLOW_CREDENTIAL_REF && process.env.TITAN_WORKFLOW_WORKER_ID
+    ? { credentialRef: process.env.TITAN_WORKFLOW_CREDENTIAL_REF, workerId: process.env.TITAN_WORKFLOW_WORKER_ID } : undefined);
   await app.get(DatabaseService).initialize();
+  try { await app.get(WorkflowAuth).initialize(identity, options.resolveWorkflowCredential); }
+  catch (error) { await app.close(); throw error; }
   await app.init();
   const fastify = app.getHttpAdapter().getInstance();
   fastify.removeContentTypeParser('application/json');

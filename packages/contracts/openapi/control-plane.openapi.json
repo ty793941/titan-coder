@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T07:33:46.843Z"
+    "generatedAt": "2026-11-24T09:36:54.671Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -2368,6 +2368,1160 @@
         },
         "x-idempotency-required": false
       }
+    },
+    "/api/sessions/{id}/background-jobs": {
+      "post": {
+        "operationId": "createBackgroundJob",
+        "summary": "创建已授权后台任务",
+        "description": "创建已授权后台任务",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackgroundJobCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已持久化pending_dispatch；同键同正文重放同一任务。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listBackgroundJobs",
+        "summary": "分页读取同Session后台任务",
+        "description": "仅同Session，createdAt倒序、id升序，默认50最多100，offset最多1000000；拒绝未知query字段。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "安全后台任务数组。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackgroundJob"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/background-jobs/{id}": {
+      "get": {
+        "operationId": "getBackgroundJob",
+        "summary": "读取后台任务",
+        "description": "读取后台任务",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "业务任务及当前Run观察。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/background-jobs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelBackgroundJob",
+        "summary": "持久化后台任务取消意图",
+        "description": "原子记录取消意图并取消同一Run、执行队列与cloud租约，重复保持终态；迟到dispatch不能创建Run。响应不证明进程或容器已退出。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrchestrationEmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "当前后台任务业务状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/sessions/{id}/schedules": {
+      "post": {
+        "operationId": "createExecutionSchedule",
+        "summary": "创建默认禁用的有限次数调度",
+        "description": "创建默认禁用的有限次数调度",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "enabled=false、pending_sync；同键同正文重放。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listExecutionSchedules",
+        "summary": "分页读取Session调度",
+        "description": "分页读取Session调度",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "同Session安全调度定义数组。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Schedule"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/schedules/{id}": {
+      "get": {
+        "operationId": "getExecutionSchedule",
+        "summary": "读取安全调度定义",
+        "description": "读取安全调度定义",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "不含执行配置、宿主路径或凭证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/schedules/{id}/update": {
+      "post": {
+        "operationId": "updateExecutionSchedule",
+        "summary": "update调度定义",
+        "description": "expectedVersion精确匹配才变更，version加一并原子写sync_schedule命令，ACK当前版本前保持pending_sync；旧版本ACK不能覆盖新定义。update传完整时间/授权定义并保留enabled和已用次数，暂停不取消既有Run。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "新版本安全调度定义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/schedules/{id}/enable": {
+      "post": {
+        "operationId": "enableExecutionSchedule",
+        "summary": "enable调度定义",
+        "description": "expectedVersion精确匹配才变更，version加一并原子写sync_schedule命令，ACK当前版本前保持pending_sync；旧版本ACK不能覆盖新定义。update传完整时间/授权定义并保留enabled和已用次数，暂停不取消既有Run。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "新版本安全调度定义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/schedules/{id}/pause": {
+      "post": {
+        "operationId": "pauseExecutionSchedule",
+        "summary": "pause调度定义",
+        "description": "expectedVersion精确匹配才变更，version加一并原子写sync_schedule命令，ACK当前版本前保持pending_sync；旧版本ACK不能覆盖新定义。update传完整时间/授权定义并保留enabled和已用次数，暂停不取消既有Run。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "新版本安全调度定义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/commands/claim": {
+      "post": {
+        "operationId": "claimWorkflowCommand",
+        "summary": "领取Workflow命令投递租约",
+        "description": "workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "固定格式安全命令。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowCommand"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "当前没有可领取命令，无正文。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/commands/{id}/complete": {
+      "post": {
+        "operationId": "completeWorkflowCommand",
+        "summary": "确认当前投递租约",
+        "description": "仅同worker与当前未到期claimToken可ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "投递已确认，无正文。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/commands/{id}/retry": {
+      "post": {
+        "operationId": "retryWorkflowCommand",
+        "summary": "有限退避或停止重试",
+        "description": "有效租约内retryable=true退避1秒指数增长、最多300秒、最多10次；永久错误或耗尽转failed。只保存固定errorCode。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRetryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "重试或失败状态已保存，无正文。"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/jobs/{id}": {
+      "get": {
+        "operationId": "observeWorkflowJob",
+        "summary": "观察同一业务Run",
+        "description": "观察同一业务Run",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "严格最小观察结构。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/jobs/{id}/dispatch": {
+      "post": {
+        "operationId": "dispatchWorkflowJob",
+        "summary": "幂等原子派发业务任务",
+        "description": "同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrchestrationEmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "严格最小观察结构。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/jobs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelWorkflowJob",
+        "summary": "按持久截止时间取消业务任务",
+        "description": "reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowCancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "严格最小观察结构。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/schedules/{id}": {
+      "get": {
+        "operationId": "getWorkflowSchedule",
+        "summary": "读取安全Schedule定义",
+        "description": "读取安全Schedule定义",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "安全定义，仅用于同步Temporal Schedule。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/schedules/{id}/occurrences": {
+      "post": {
+        "operationId": "admitScheduleOccurrence",
+        "summary": "原子接纳稳定触发",
+        "description": "occurrenceId为稳定Temporal Workflow ID且全局唯一，同ID异定义409；同Schedule/版本/计划时间不会重复接纳。同触发重试返回相同结果，创建Job绑定occurrenceId且不再投递start_job命令；不会提前创建execution_job或消耗maxRuns。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleOccurrenceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "created与jobId或skipped。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleOccurrenceResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2382,6 +3536,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Authorization: Bearer <TITAN_CONSOLE_TOKEN>；用于控制台、工件正文、Handoff和Cloud管理。由本机服务端环境配置，未设置时拒绝访问；不是模型API Key。"
+      },
+      "WorkflowBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "独立Workflow服务身份，仅用于/api/internal/workflow；绑定workerId，凭证通过Keychain引用或受控stdin加载至内存，拒绝Console/Daemon凭证复用，未配置时拒绝访问。环境仅允许非Secret的credentialRef与workerId，禁止明文Token。"
       }
     },
     "parameters": {
@@ -3587,6 +4746,845 @@
         "additionalProperties": true,
         "x-unknown-fields": "stripped"
       },
+      "BackgroundJobCreateRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "run",
+              "observe"
+            ]
+          },
+          "runInBackground": {
+            "type": "boolean",
+            "const": true
+          },
+          "planHash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "deadlineAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          }
+        },
+        "required": [
+          "kind",
+          "runInBackground",
+          "planHash",
+          "deadlineAt",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "run"
+              }
+            },
+            "not": {
+              "required": [
+                "runId"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "observe"
+              }
+            },
+            "required": [
+              "runId"
+            ]
+          }
+        ],
+        "description": "显式runInBackground=true。run仅接受具备最新批准计划与执行配置的local Session；observe必须指定同Session既有Run，允许local/cloud，仅追踪该Run，不创建新attempt或凭证租约。deadlineAt必须为未来24小时内UTC时间；创建只持久化pending_dispatch与start_job命令，不提前创建execution_job。幂等键按Session隔离，同键异正文409。"
+      },
+      "BackgroundJob": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_dispatch",
+              "dispatching",
+              "running",
+              "waiting_input",
+              "reconnecting",
+              "cancel_requested",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "deadlineAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_FAILED",
+              "RESOURCE_NOT_FOUND",
+              "VERSION_CONFLICT",
+              "IDEMPOTENCY_CONFLICT",
+              "INVALID_STATE_TRANSITION",
+              "TASK_PLAN_REQUIRED",
+              "PLAN_HASH_STALE",
+              "PERMISSION_DENIED",
+              "APPROVAL_REQUIRED",
+              "TOOL_INPUT_INVALID",
+              "TOOL_BLOCKED_BY_HOOK",
+              "TOOL_EXECUTION_FAILED",
+              "TOOL_TIMEOUT",
+              "DAEMON_UNAVAILABLE",
+              "WORKSPACE_CONFLICT",
+              "CHECKPOINT_NOT_FOUND",
+              "RUNTIME_ADAPTER_UNAVAILABLE",
+              "EVENT_SEQUENCE_GAP",
+              "EXECUTION_LEASE_EXPIRED",
+              "CLOUD_SECRET_LEASE_EXPIRED",
+              "CLOUD_SECRET_CONSUMED",
+              "CLOUD_WORKER_DISCONNECTED",
+              "CLOUD_RUNTIME_WAITING_INPUT",
+              "HANDOFF_CHECKPOINT_INVALID",
+              "HANDOFF_TARGET_UNAVAILABLE",
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
+              "WORKFLOW_COMMAND_LEASE_EXPIRED",
+              "WORKFLOW_COMMAND_FAILED",
+              "BACKGROUND_JOB_EXPIRED",
+              "SCHEDULE_DISABLED",
+              "SCHEDULE_DEFINITION_SUPERSEDED",
+              "SCHEDULE_MAX_RUNS_REACHED",
+              "SCHEDULE_OVERLAP",
+              "SCHEDULE_OUTSIDE_WINDOW",
+              "SCHEDULE_CATCHUP_SKIPPED"
+            ]
+          },
+          "projectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "run",
+              "observe"
+            ]
+          },
+          "planHash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "workflowId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "workflowVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "jobId",
+          "status",
+          "deadlineAt",
+          "projectId",
+          "taskId",
+          "sessionId",
+          "kind",
+          "planHash",
+          "workflowId",
+          "workflowVersion",
+          "cancelRequested",
+          "version",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "JobObservation": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_dispatch",
+              "dispatching",
+              "running",
+              "waiting_input",
+              "reconnecting",
+              "cancel_requested",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "deadlineAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_FAILED",
+              "RESOURCE_NOT_FOUND",
+              "VERSION_CONFLICT",
+              "IDEMPOTENCY_CONFLICT",
+              "INVALID_STATE_TRANSITION",
+              "TASK_PLAN_REQUIRED",
+              "PLAN_HASH_STALE",
+              "PERMISSION_DENIED",
+              "APPROVAL_REQUIRED",
+              "TOOL_INPUT_INVALID",
+              "TOOL_BLOCKED_BY_HOOK",
+              "TOOL_EXECUTION_FAILED",
+              "TOOL_TIMEOUT",
+              "DAEMON_UNAVAILABLE",
+              "WORKSPACE_CONFLICT",
+              "CHECKPOINT_NOT_FOUND",
+              "RUNTIME_ADAPTER_UNAVAILABLE",
+              "EVENT_SEQUENCE_GAP",
+              "EXECUTION_LEASE_EXPIRED",
+              "CLOUD_SECRET_LEASE_EXPIRED",
+              "CLOUD_SECRET_CONSUMED",
+              "CLOUD_WORKER_DISCONNECTED",
+              "CLOUD_RUNTIME_WAITING_INPUT",
+              "HANDOFF_CHECKPOINT_INVALID",
+              "HANDOFF_TARGET_UNAVAILABLE",
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
+              "WORKFLOW_COMMAND_LEASE_EXPIRED",
+              "WORKFLOW_COMMAND_FAILED",
+              "BACKGROUND_JOB_EXPIRED",
+              "SCHEDULE_DISABLED",
+              "SCHEDULE_DEFINITION_SUPERSEDED",
+              "SCHEDULE_MAX_RUNS_REACHED",
+              "SCHEDULE_OVERLAP",
+              "SCHEDULE_OUTSIDE_WINDOW",
+              "SCHEDULE_CATCHUP_SKIPPED"
+            ]
+          }
+        },
+        "required": [
+          "jobId",
+          "status",
+          "deadlineAt"
+        ],
+        "additionalProperties": false,
+        "description": "Temporal可接收的最小业务观察，严格字段白名单；errorCode仅允许固定平台错误码，禁止错误正文、Prompt、凭证、URL及Checkpoint。paused Run映射waiting_input；不会自动重执行或复用cloud租约。"
+      },
+      "ScheduleCreateRequest": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-validation": "IANA timezone accepted by Intl.DateTimeFormat"
+          },
+          "cron": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "x-validation": "exactly five numeric cron fields; each field permits *, numeric range/list and positive step within its range"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 31536000
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "maxRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "overlapPolicy": {
+            "type": "string",
+            "const": "skip"
+          },
+          "catchupWindowSeconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600,
+            "default": 60
+          },
+          "enabled": {
+            "type": "boolean",
+            "const": false
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "planHash",
+          "timezone",
+          "startsAt",
+          "endsAt",
+          "maxRuns",
+          "overlapPolicy",
+          "enabled",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "cron"
+            ],
+            "not": {
+              "required": [
+                "intervalSeconds"
+              ]
+            }
+          },
+          {
+            "required": [
+              "intervalSeconds"
+            ],
+            "not": {
+              "required": [
+                "cron"
+              ]
+            }
+          }
+        ],
+        "description": "cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。"
+      },
+      "ScheduleUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-validation": "IANA timezone accepted by Intl.DateTimeFormat"
+          },
+          "cron": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "x-validation": "exactly five numeric cron fields; each field permits *, numeric range/list and positive step within its range"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 31536000
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "maxRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "overlapPolicy": {
+            "type": "string",
+            "const": "skip"
+          },
+          "catchupWindowSeconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600,
+            "default": 60
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "planHash",
+          "timezone",
+          "startsAt",
+          "endsAt",
+          "maxRuns",
+          "overlapPolicy",
+          "expectedVersion"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "cron"
+            ],
+            "not": {
+              "required": [
+                "intervalSeconds"
+              ]
+            }
+          },
+          {
+            "required": [
+              "intervalSeconds"
+            ],
+            "not": {
+              "required": [
+                "cron"
+              ]
+            }
+          }
+        ],
+        "description": "cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。"
+      },
+      "ScheduleVersionRequest": {
+        "type": "object",
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "additionalProperties": false
+      },
+      "Schedule": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-validation": "IANA timezone accepted by Intl.DateTimeFormat"
+          },
+          "cron": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "x-validation": "exactly five numeric cron fields; each field permits *, numeric range/list and positive step within its range"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 31536000
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "maxRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "overlapPolicy": {
+            "type": "string",
+            "const": "skip"
+          },
+          "catchupWindowSeconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600,
+            "default": 60
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "runCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "syncStatus": {
+            "type": "string",
+            "enum": [
+              "pending_sync",
+              "active",
+              "paused",
+              "blocked"
+            ]
+          },
+          "temporalScheduleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "planHash",
+          "timezone",
+          "startsAt",
+          "endsAt",
+          "maxRuns",
+          "overlapPolicy",
+          "id",
+          "sessionId",
+          "version",
+          "enabled",
+          "runCount",
+          "syncStatus",
+          "temporalScheduleId",
+          "createdAt"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "cron"
+            ],
+            "not": {
+              "required": [
+                "intervalSeconds"
+              ]
+            }
+          },
+          {
+            "required": [
+              "intervalSeconds"
+            ],
+            "not": {
+              "required": [
+                "cron"
+              ]
+            }
+          }
+        ],
+        "description": "cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。"
+      },
+      "ScheduleOccurrenceRequest": {
+        "type": "object",
+        "properties": {
+          "definitionVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "occurrenceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_/:.\\-]*$"
+          },
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "definitionVersion",
+          "occurrenceId",
+          "scheduledAt"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleOccurrenceResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "created"
+              },
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              }
+            },
+            "required": [
+              "status",
+              "jobId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "skipped"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "discriminator": {
+          "propertyName": "status"
+        }
+      },
+      "WorkflowCommand": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "claimToken": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "start_job",
+              "cancel_job",
+              "sync_schedule"
+            ]
+          },
+          "targetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "definitionVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "id",
+          "claimToken",
+          "kind",
+          "targetId"
+        ],
+        "additionalProperties": false
+      },
+      "WorkflowClaimRequest": {
+        "type": "object",
+        "properties": {
+          "workerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          }
+        },
+        "required": [
+          "workerId"
+        ],
+        "additionalProperties": false
+      },
+      "WorkflowCompleteRequest": {
+        "type": "object",
+        "properties": {
+          "claimToken": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "claimToken"
+        ],
+        "additionalProperties": false
+      },
+      "WorkflowRetryRequest": {
+        "type": "object",
+        "properties": {
+          "claimToken": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_FAILED",
+              "RESOURCE_NOT_FOUND",
+              "VERSION_CONFLICT",
+              "IDEMPOTENCY_CONFLICT",
+              "INVALID_STATE_TRANSITION",
+              "TASK_PLAN_REQUIRED",
+              "PLAN_HASH_STALE",
+              "PERMISSION_DENIED",
+              "APPROVAL_REQUIRED",
+              "TOOL_INPUT_INVALID",
+              "TOOL_BLOCKED_BY_HOOK",
+              "TOOL_EXECUTION_FAILED",
+              "TOOL_TIMEOUT",
+              "DAEMON_UNAVAILABLE",
+              "WORKSPACE_CONFLICT",
+              "CHECKPOINT_NOT_FOUND",
+              "RUNTIME_ADAPTER_UNAVAILABLE",
+              "EVENT_SEQUENCE_GAP",
+              "EXECUTION_LEASE_EXPIRED",
+              "CLOUD_SECRET_LEASE_EXPIRED",
+              "CLOUD_SECRET_CONSUMED",
+              "CLOUD_WORKER_DISCONNECTED",
+              "CLOUD_RUNTIME_WAITING_INPUT",
+              "HANDOFF_CHECKPOINT_INVALID",
+              "HANDOFF_TARGET_UNAVAILABLE",
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
+              "WORKFLOW_COMMAND_LEASE_EXPIRED",
+              "WORKFLOW_COMMAND_FAILED",
+              "BACKGROUND_JOB_EXPIRED",
+              "SCHEDULE_DISABLED",
+              "SCHEDULE_DEFINITION_SUPERSEDED",
+              "SCHEDULE_MAX_RUNS_REACHED",
+              "SCHEDULE_OVERLAP",
+              "SCHEDULE_OUTSIDE_WINDOW",
+              "SCHEDULE_CATCHUP_SKIPPED"
+            ]
+          }
+        },
+        "required": [
+          "claimToken",
+          "retryable",
+          "errorCode"
+        ],
+        "additionalProperties": false
+      },
+      "WorkflowCancelRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "OrchestrationEmptyRequest": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
       "Actor": {
         "type": "object",
         "properties": {
@@ -4266,6 +6264,15 @@
               "HANDOFF_TARGET_UNAVAILABLE",
               "HANDOFF_SNAPSHOT_FAILED",
               "HANDOFF_TRANSFER_FAILED",
+              "WORKFLOW_COMMAND_LEASE_EXPIRED",
+              "WORKFLOW_COMMAND_FAILED",
+              "BACKGROUND_JOB_EXPIRED",
+              "SCHEDULE_DISABLED",
+              "SCHEDULE_DEFINITION_SUPERSEDED",
+              "SCHEDULE_MAX_RUNS_REACHED",
+              "SCHEDULE_OVERLAP",
+              "SCHEDULE_OUTSIDE_WINDOW",
+              "SCHEDULE_CATCHUP_SKIPPED",
               "INTERNAL_ERROR"
             ]
           },

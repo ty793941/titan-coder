@@ -17,6 +17,7 @@ type CreateRunOptions = {
   idempotencyScope?: string;
   resumeFromRunId?: string;
 };
+export type RunCancellationActor = { type: 'user' | 'system'; id: string };
 
 @Injectable()
 export class RunsService {
@@ -41,6 +42,8 @@ export class RunsService {
       const sourceRun = await trx.selectFrom('run').select(['id', 'session_id']).where('id', '=', runId).executeTakeFirst();
       if (!sourceRun) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} was not found`);
       await this.authorizeCloudRun(trx, sourceRun.session_id, authorization);
+      await trx.selectFrom('execution_job').select('id').where('run_id', '=', runId).forUpdate().execute();
+      await trx.selectFrom('run').select('id').where('id', '=', runId).forUpdate().execute();
       const run = await this.createInTransaction(trx, sourceRun.session_id, parsed, {
         allowPaused: true,
         idempotencyScope: scope,
@@ -50,11 +53,11 @@ export class RunsService {
     });
   }
 
-  private async createInTransaction(
+  async createInTransaction(
     trx: Transaction<Database>,
     sessionId: string,
     parsed: z.infer<typeof runCreateRequestSchema>,
-    options: CreateRunOptions,
+    options: CreateRunOptions = {},
   ): Promise<Run> {
     const session = await trx.selectFrom('session').selectAll().where('id', '=', sessionId).forUpdate().executeTakeFirst();
     if (!session) throw new DomainError('RESOURCE_NOT_FOUND', `session ${sessionId} was not found`);
@@ -86,8 +89,8 @@ export class RunsService {
       if (checkpoint.session_id !== sessionId) throw new DomainError('VALIDATION_FAILED', 'checkpoint belongs to another session');
     }
     const activeStatuses = options.allowPaused
-      ? ['queued', 'starting', 'running', 'waiting_input']
-      : ['queued', 'starting', 'running', 'waiting_input', 'paused'];
+      ? ['queued', 'starting', 'running', 'waiting_input', 'reconnecting']
+      : ['queued', 'starting', 'running', 'waiting_input', 'paused', 'reconnecting'];
     const active = await trx.selectFrom('run').select('id').where('session_id', '=', sessionId)
       .where('status', 'in', activeStatuses).executeTakeFirst();
     if (active) throw new DomainError('VERSION_CONFLICT', 'session already has an active run');
@@ -130,12 +133,12 @@ export class RunsService {
 
   async pause(runId: string, authorization?: string): Promise<Run> {
     await this.database.db.transaction().execute(async trx => {
+      const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).forUpdate().executeTakeFirst();
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
       if (!run) throw new DomainError('RESOURCE_NOT_FOUND', `run ${runId} was not found`);
       if (await this.authorizeCloudRun(trx, run.session_id, authorization)) {
         throw new DomainError('PERMISSION_DENIED', 'CLOUD_PAUSE_UNSUPPORTED: cloud runs do not support pause; cancel the execution instead', { reason: 'CLOUD_PAUSE_UNSUPPORTED' });
       }
-      const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).forUpdate().executeTakeFirst();
       if (run.status === 'paused') {
         if (job && (!job.cancel_requested || job.status !== 'paused')) {
           await trx.updateTable('execution_job').set({ status: 'paused', cancel_requested: true }).where('id', '=', job.id).execute();
@@ -160,19 +163,27 @@ export class RunsService {
 
   async cancel(runId: string, authorization?: string): Promise<Run> {
     await this.database.db.transaction().execute(async trx => {
+      const source = await trx.selectFrom('run').select('session_id').where('id', '=', runId).executeTakeFirst();
+      if (!source) throw new DomainError('RESOURCE_NOT_FOUND', 'run was not found');
+      await this.authorizeCloudRun(trx, source.session_id, authorization);
+      await this.cancelInTransaction(trx, runId);
+    });
+    return this.get(runId);
+  }
+
+  async cancelInTransaction(trx: Transaction<Database>, runId: string, actor: RunCancellationActor = { type: 'user', id: 'local-user' }): Promise<void> {
       const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).forUpdate().executeTakeFirst();
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirst();
       if (!run) throw new DomainError('RESOURCE_NOT_FOUND', 'run was not found');
-      await this.authorizeCloudRun(trx, run.session_id, authorization);
       if (['completed', 'failed', 'cancelled'].includes(run.status)) return;
+      await trx.selectFrom('session').select('id').where('id', '=', run.session_id).forUpdate().execute();
+      const latestRun = await trx.selectFrom('run').select('id').where('session_id', '=', run.session_id).orderBy('attempt', 'desc').executeTakeFirstOrThrow();
       if (job) await trx.updateTable('execution_job').set({ cancel_requested: true, status: 'cancelled' }).where('id', '=', job.id).execute();
       await trx.updateTable('run').set({ status: 'cancelled', version: run.version + 1 }).where('id', '=', runId).execute();
-      await trx.updateTable('session').set(eb => ({ status: 'cancelled', version: eb('version', '+', 1) })).where('id', '=', run.session_id).execute();
+      if (latestRun.id === runId) await trx.updateTable('session').set(eb => ({ status: 'cancelled', version: eb('version', '+', 1) })).where('id', '=', run.session_id).execute();
       await this.cloud.finish(trx, runId, 'cancelled');
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id').select(['task.project_id', 'task.id as task_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
-      await this.events.append(trx, { eventType: 'run.cancelled', projectId: context.project_id, taskId: context.task_id, sessionId: run.session_id, runId, actor: { type: 'user', id: 'local-user' }, payload: { status: 'cancelled' } });
-    });
-    return this.get(runId);
+      await this.events.append(trx, { eventType: 'run.cancelled', projectId: context.project_id, taskId: context.task_id, sessionId: run.session_id, runId, actor, payload: { status: 'cancelled' } });
   }
 
   private async authorizeCloudRun(trx: Transaction<Database>, sessionId: string, authorization?: string): Promise<boolean> {

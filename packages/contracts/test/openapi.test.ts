@@ -17,7 +17,8 @@ const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 function controllerRoutes() {
   const modules = new URL('apps/control-plane/src/modules/', sourceRoot);
   return readdirSync(modules).flatMap(module => {
-    const source = readFileSync(new URL(`apps/control-plane/src/modules/${module}/${module}.controller.ts`, sourceRoot), 'utf8');
+    return readdirSync(new URL(`${module}/`, modules)).filter(file => file.endsWith('.controller.ts')).flatMap(file => {
+    const source = readFileSync(new URL(`apps/control-plane/src/modules/${module}/${file}`, sourceRoot), 'utf8');
     const prefix = /@Controller\('([^']+)'\)/.exec(source)?.[1];
     if (!prefix) throw new Error(`Missing controller prefix for ${module}`);
     const matches = [...source.matchAll(/@(Get|Post)\((?:'([^']+)')?\)/g)];
@@ -30,13 +31,30 @@ function controllerRoutes() {
         method: method.toLowerCase(),
         status: /@HttpCode\((\d+)\)/.exec(body)?.[1] ?? (method === 'Post' ? '201' : '200'),
         security: body.includes('this.daemons.authenticate(') ? [{ DaemonBearer: [] }]
+          : body.includes('this.workflowAuth.authenticate(') ? [{ WorkflowBearer: [] }]
           : body.includes('authenticateConsole(') ? [{ ConsoleBearer: [] }] : [],
       };
+    });
     });
   });
 }
 
 describe('Phase 1 OpenAPI freeze', () => {
+  it('freezes strict background, schedule and independent workflow service contracts', () => {
+    const api = load();
+    expect(api.components.securitySchemes.WorkflowBearer).toMatchObject({ type: 'http', scheme: 'bearer' });
+    for (const path of ['/api/internal/workflow/commands/claim', '/api/internal/workflow/jobs/{id}/dispatch', '/api/internal/workflow/jobs/{id}/cancel', '/api/internal/workflow/schedules/{id}/occurrences']) {
+      expect(api.paths[path].post.security).toEqual([{ WorkflowBearer: [] }]);
+      expect(api.paths[path].post.responses).toHaveProperty('401');
+    }
+    expect(api.components.schemas.JobObservation.required).toEqual(['jobId', 'status', 'deadlineAt']);
+    expect(Object.keys(api.components.schemas.JobObservation.properties)).toEqual(['jobId', 'status', 'deadlineAt', 'runId', 'errorCode']);
+    for (const name of ['BackgroundJobCreateRequest', 'ScheduleCreateRequest', 'ScheduleUpdateRequest', 'WorkflowCommand', 'JobObservation', 'WorkflowRetryRequest']) expect(api.components.schemas[name].additionalProperties).toBe(false);
+    expect(api.components.schemas.BackgroundJobCreateRequest.properties.runInBackground).toEqual({ type: 'boolean', const: true });
+    expect(api.components.schemas.ScheduleCreateRequest.properties.maxRuns).toMatchObject({ minimum: 1, maximum: 100 });
+    expect(api.components.schemas.ScheduleCreateRequest.properties.catchupWindowSeconds).toMatchObject({ minimum: 10, maximum: 3600, default: 60 });
+    expect(api.paths['/api/internal/workflow/commands/claim'].post.responses['204']).not.toHaveProperty('content');
+  });
   it('publishes valid JSON and exactly the implemented controller routes', () => {
     const api = load();
     expect(api.openapi).toBe('3.1.0');

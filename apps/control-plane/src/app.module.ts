@@ -22,10 +22,16 @@ import { HandoffsController } from './modules/handoffs/handoffs.controller.js';
 import { HandoffsService } from './modules/handoffs/handoffs.service.js';
 import { CloudExecutionsController } from './modules/cloud-executions/cloud-executions.controller.js';
 import { CloudExecutionsService } from './modules/cloud-executions/cloud-executions.service.js';
+import { WorkflowAuth } from './common/workflow-auth.js';
+import { BackgroundJobsService } from './modules/orchestration/background-jobs.service.js';
+import { WorkflowCommandsService } from './modules/orchestration/workflow-commands.service.js';
+import { SchedulesService } from './modules/orchestration/schedules.service.js';
+import { OrchestrationController } from './modules/orchestration/orchestration.controller.js';
+import { WorkflowInternalController } from './modules/orchestration/workflow-internal.controller.js';
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController, OrchestrationController, WorkflowInternalController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService, WorkflowAuth, BackgroundJobsService, WorkflowCommandsService, SchedulesService],
 })
 export class AppModule {}
