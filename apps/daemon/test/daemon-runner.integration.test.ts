@@ -1,16 +1,18 @@
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DaemonRunner, type DaemonRunnerOptions } from '../src/daemon-runner.js';
+import { DockerRuntime } from '../src/cloud/docker-runtime.js';
+import { LocalSnapshotStore } from '../src/cloud/snapshot-store.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/runtime-worker.cjs', import.meta.url));
 const cleanup: Array<() => Promise<void>> = [];
-afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
+afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); vi.restoreAllMocks(); });
 
 async function until(predicate: () => boolean | Promise<boolean>, timeoutMs = 6000) {
   const deadline = Date.now() + timeoutMs;
@@ -28,6 +30,7 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
   const events: RunProgress[] = [];
   const attempts: RunProgress[] = [];
   let registrationCount = 0;
+  let registration: Record<string, unknown> = {};
   let heartbeatCount = 0;
   let offline = false;
   let cancelRequested = false;
@@ -42,12 +45,14 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/api/daemons/register') {
       registrationCount++;
+      registration = body;
       expect(body.workspaceRoots).toEqual([workspace]);
       response.end(JSON.stringify({ daemonId: 'daemon-1', authToken: 'device-secret-token' }));
       return;
     }
     if (revoked || request.headers.authorization !== 'Bearer device-secret-token') { response.statusCode = 401; response.end('{}'); return; }
     if (request.url?.endsWith('/heartbeat')) { heartbeatCount++; response.end('{}'); return; }
+    if (request.url?.endsWith('/cloud')) { response.end(JSON.stringify({ secretConsumed: body.consumeSecret === true })); return; }
     if (request.url?.endsWith('/claim')) {
       claimTimes.push(Date.now());
       if (claimFailures > 0) { claimFailures--; response.statusCode = 503; response.end('{}'); return; }
@@ -85,10 +90,10 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
     ...overrides,
   };
   const sessions: Array<{ abort: AbortController; promise: Promise<void>; errors: unknown[] }> = [];
-  const start = () => {
+  const start = (dependencies?: { credentialResolver?: (ref: string) => Promise<string | undefined> }) => {
     const abort = new AbortController();
     const errors: unknown[] = [];
-    const promise = new DaemonRunner(options).run(abort.signal).catch(error => { errors.push(error); });
+    const promise = new DaemonRunner(options, dependencies).run(abort.signal).catch(error => { errors.push(error); });
     const session = { abort, promise, errors };
     sessions.push(session);
     return session;
@@ -98,11 +103,39 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
     failClaims: (count: number) => { claimFailures = count; },
     invalidProgressAck: () => { badProgressResponse = true; },
     offline: (value: boolean) => { offline = value; }, cancel: () => { cancelRequested = true; }, revoke: () => { revoked = true; },
-    registrations: () => registrationCount, heartbeats: () => heartbeatCount,
+    registrations: () => registrationCount, registration: () => registration, heartbeats: () => heartbeatCount,
   };
 }
 
 describe('DaemonRunner real HTTP and child IPC', () => {
+  it('registers cloud capabilities and waits for a missing dependency-resolved credential without starting Docker', async () => {
+    const h = await harness();
+    execFileSync('git', ['init', '--quiet', h.workspace]);
+    execFileSync('git', ['-C', h.workspace, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
+    const snapshotRoot = join(h.root, 'snapshots');
+    const store = new LocalSnapshotStore({ root: snapshotRoot, workspaceRoots: [h.workspace] });
+    const snapshot = await store.exportWorkspace(h.workspace);
+    h.options.environmentType = 'cloud';
+    h.options.cloud = { image: 'titan-session:fixture', workspaceRoot: h.workspace, snapshotRoot };
+    Object.assign(h.options, { credentialResolver: 'remote-json-must-not-be-used' });
+    Object.assign(h.dispatch.config, { environmentType: 'cloud', workspacePath: '/workspace/session', credentialRef: 'keychain://fixture' });
+    h.dispatch.cloud = { executionId: 'cloud-1', snapshot, secretLeaseId: 'lease-1', secretLeaseExpiresAt: new Date(Date.now() + 60000).toISOString() };
+    vi.spyOn(DockerRuntime.prototype, 'create').mockResolvedValue({ id: 'a'.repeat(64), name: `titan-cloud-${'b'.repeat(40)}` });
+    vi.spyOn(DockerRuntime.prototype, 'inspect').mockResolvedValue({ state: 'created' });
+    vi.spyOn(DockerRuntime.prototype, 'find').mockResolvedValue(undefined);
+    vi.spyOn(DockerRuntime.prototype, 'stop').mockResolvedValue();
+    const start = vi.spyOn(DockerRuntime.prototype, 'start');
+    const resolver = vi.fn(async () => undefined);
+    const session = h.start({ credentialResolver: resolver });
+    await until(() => h.events.some(event => event.type === 'waiting_input'));
+    session.abort.abort(); await session.promise;
+    expect(resolver).toHaveBeenCalledExactlyOnceWith('keychain://fixture');
+    expect(start).not.toHaveBeenCalled();
+    expect(h.registration()).toMatchObject({ environmentType: 'cloud', capabilities: ['codex', 'qwen', 'cloud-session', 'container', 'snapshot-transfer', 'secret-lease'] });
+    expect(h.events.at(-1)).toMatchObject({ type: 'waiting_input', payload: { code: 'CLOUD_SECRET_UNAVAILABLE' } });
+    expect(session.errors).toEqual([]);
+  });
+
   it('takes skill activation and trusted-code policy only from the local daemon configuration', async () => {
     const h = await harness('policy', { localPolicy: { enabledSkills: ['review.local'], trustedCode: false } });
     Object.assign(h.dispatch.config, { localPolicy: { enabledSkills: ['remote.escalation'], trustedCode: true } });

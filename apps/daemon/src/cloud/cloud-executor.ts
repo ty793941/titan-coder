@@ -230,7 +230,7 @@ export class CloudExecutor {
         const parent = join(this.options.workspaceRoot, this.dispatch.sessionId);
         await ensurePrivateDirectory(parent);
         assertCloudDirectory(parent);
-        await this.options.snapshots.materialize({ ...this.dispatch.cloud.snapshot, checksum: this.dispatch.cloud.snapshot.checksum.replace(/^sha256:/, '') }, join(parent, 'session'));
+        await this.options.snapshots.materialize(this.dispatch.cloud.snapshot, join(parent, 'session'));
         this.checkInterrupted();
         this.stage = 'create';
         this.handle = await this.options.runtime.create({ sessionId: this.dispatch.sessionId, runId: this.dispatch.runId, workspacePath: parent });

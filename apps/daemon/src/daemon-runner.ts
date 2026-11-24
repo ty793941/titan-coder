@@ -65,7 +65,7 @@ export class DaemonRunner {
   private workerError: unknown;
   private running = false;
 
-  constructor(options: DaemonRunnerOptions) {
+  constructor(options: DaemonRunnerOptions, private readonly dependencies: { credentialResolver?: (reference: string) => Promise<string | undefined> } = {}) {
     this.options = structuredClone(options);
     if (!options.workspaceRoots.length || options.workspaceRoots.some(root => !isAbsolute(root)) || !isAbsolute(options.stateDirectory)) throw new Error('ABSOLUTE_LOCAL_PATHS_REQUIRED');
     if (options.environmentType !== undefined && !['local', 'cloud'].includes(options.environmentType)) throw new Error('INVALID_EXECUTION_ENVIRONMENT');
@@ -139,7 +139,7 @@ export class DaemonRunner {
           stateDirectory: join(options.stateDirectory, 'cloud'), workspaceRoot: cloud.workspaceRoot,
           runtime: new DockerRuntime({ image: cloud.image, workspaceRoot: cloud.workspaceRoot, ownerId: device.daemonId, ...(cloud.network ? { network: cloud.network } : {}) }),
           snapshots: new LocalSnapshotStore({ root: cloud.snapshotRoot, workspaceRoots: [cloud.workspaceRoot] }),
-          broker: new SecretBroker(async reference => reference.startsWith('keychain://') ? resolveCredential(reference) : undefined),
+          broker: new SecretBroker(this.dependencies.credentialResolver ?? (async reference => reference.startsWith('keychain://') ? resolveCredential(reference) : undefined)),
           lifecycle: body => {
             if (!this.active) throw new Error('CLOUD_ACTIVE_SESSION_REQUIRED');
             return this.client.cloudLifecycle(device, this.active.dispatch.runId, body);

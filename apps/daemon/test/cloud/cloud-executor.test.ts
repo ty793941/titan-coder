@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
@@ -74,6 +75,8 @@ async function fixture(timeoutMs = 5000) {
   const source = join(root, 'source');
   await mkdir(workspaceRoot, { mode: 0o700 }); await mkdir(source, { mode: 0o700 });
   await writeFile(join(source, 'answer.txt'), 'snapshot source');
+  execFileSync('git', ['init', '--quiet', source]);
+  execFileSync('git', ['-C', source, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
   const snapshots = new LocalSnapshotStore({ root: join(root, 'snapshots'), workspaceRoots: [source, workspaceRoot] });
   const snapshot = await snapshots.exportWorkspace(source);
   const dispatch: RunDispatch = {
@@ -82,7 +85,7 @@ async function fixture(timeoutMs = 5000) {
     config: { daemonId: 'daemon-1', runtime: 'codex', credentialRef: 'broker://key', baseUrlRef: 'broker://url', workspacePath: '/untrusted/remote',
       environmentType: 'cloud', snapshotManifestRef: 'snapshot://one', secretLeaseRef: 'lease://one', allowedTools: ['artifact.write'], maxTurns: 2, timeoutMs,
       localPolicy: { trustedCode: true, enabledSkills: ['remote-skill'] } },
-    cloud: { executionId: 'execution-1', snapshot: { ...snapshot, checksum: `sha256:${snapshot.checksum}` }, secretLeaseId: 'lease-1', secretLeaseExpiresAt: new Date(Date.now() + 60_000).toISOString() },
+    cloud: { executionId: 'execution-1', snapshot, secretLeaseId: 'lease-1', secretLeaseExpiresAt: new Date(Date.now() + 60_000).toISOString() },
   };
   const runtime = new FakeDocker();
   const lifecycle: any[] = [];
@@ -102,6 +105,22 @@ async function fixture(timeoutMs = 5000) {
 }
 
 describe('CloudExecutor', () => {
+  it('roundtrips the actual LocalSnapshotStore sha256 manifest without rewriting its checksum', async () => {
+    const Executor = await executorClass();
+    const f = await fixture();
+    expect(f.dispatch.cloud!.snapshot.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const executor = new Executor(f.dispatch, f.options);
+    await until(() => f.runtime.calls.includes('start') || f.progress.length > 0);
+    if (f.runtime.calls.includes('start')) {
+      f.runtime.emitFrame(f.frame(1, 'completed'));
+      f.runtime.finish();
+    }
+    await executor.done;
+    expect(f.progress.at(-1)?.type).toBe('completed');
+    expect(await readFile(join(f.hostSession, 'answer.txt'), 'utf8')).toBe('snapshot source');
+    await executor.cleanup();
+  });
+
   it('materializes a private mount, consumes the CP lease before the broker, and strips remote bootstrap fields', async () => {
     const Executor = await executorClass();
     const f = await fixture();
