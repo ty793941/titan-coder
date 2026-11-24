@@ -4,7 +4,7 @@
 
 **Goal:** 在现有本机 Daemon 执行闭环上增加一个可用 Docker 容器运行的 Cloud Worker MVP，并完成可恢复的本机到云端 Session Handoff。
 
-**Architecture:** Control Plane 继续维护 Session、Run、Handoff、Cloud Execution 和 Secret Lease 事实；Cloud Worker 通过现有 Daemon HTTP 协议领取 Dispatch，在每个 Session 对应的 Docker 容器中启动现有 Runtime Worker。Container Runtime、Snapshot Transfer 和 Secret Broker 放在独立 `packages/cloud-runtime` 包中，后续可以替换为 Kubernetes、对象存储和真实 Secret Broker。
+**Architecture:** Control Plane 继续维护 Session、Run、Handoff、Cloud Execution 和 Secret Lease 事实；现有 Daemon 内的 Cloud Executor 通过 Daemon HTTP 协议领取 Dispatch，在每个 Session 对应的 Docker 容器中启动现有 Runtime Worker。Container Runtime、Snapshot Store 和 Secret Broker 放在 `apps/daemon/src/cloud/`，后续可以替换基础设施实现。
 
 **Tech Stack:** Node.js 22、TypeScript、pnpm Workspaces、NestJS/Fastify、Kysely/PostgreSQL、Zod/OpenAPI、Vitest、Docker CLI/SDK、现有 Daemon HTTP/JSON 协议。
 
@@ -12,14 +12,16 @@
 
 下方 Task 1–10 是原始拆分，包含经源码复核发现的不兼容示例，禁止直接复制实施。以已确认的最新规格（`9695ede`）及本节为执行依据：不创建 `apps/cloud-worker`，不新建重复调度服务；所有云端执行适配放入 `apps/daemon/src/cloud/`，复用既有主循环、身份、Outbox 和 HTTP Client。
 
-- [ ] A：新增容器专用 NDJSON stdin/stdout 入口，复用 `executeDispatch`；Secret 只进入启动帧，限制帧大小、重复启动、EOF 和取消；原本机 IPC 保持兼容。
-- [ ] B：新增 `cloud` 契约和 Kysely 表；现有标识全部沿用 TEXT，保留 `baseUrlRef` 和可组合 ZodObject；容器事件通过独立、认证的 lifecycle 接口发送，不作为 Run 状态。
-- [ ] C：新增一次性内存 Secret Broker、Docker 适配器和不可变快照存储；宿主解析 Keychain，容器不读取宿主凭证；快照物化完整工作目录，校验路径、哈希、数量、字节及敏感文件。
-- [ ] D：Handoff API 只创建请求；源 Daemon 确认无活动 Worker、Outbox 已排空后导出快照并登记。控制面不访问 Docker 或源文件系统；目标 Checkpoint 创建新 ID 并绑定新 Session，不放开一般跨 Session 恢复规则。
-- [ ] E：Daemon 加 cloud 执行模式，使用宿主 Docker 创建独立 Session 容器；`control` 轮询同时续租，生命周期和 Progress 继续回传控制面。容器工作区留在私有持久目录供工件读取。
-- [ ] F：恢复时检查拥有者标签和确定性容器名；已有容器只重连日志，不重复消费租约或重新启动模型。失联/租约失效进入 `reconnecting` 或 `waiting_input`；绝不无条件重建已经执行过的容器。
-- [ ] G：增加 Runtime 镜像及显式 cloud 配置；Cloud Executor 留在宿主，解决 macOS Keychain、loopback HTTP 和 Docker bind 路径问题。默认容器网络 `none`，需要模型网络时必须由本机可信配置指定网络。
-- [ ] H：完成契约、数据库、假服务、真实 Docker、全仓回归、只读 Reviewer；更新验收文档与范围，再提交并通过代理推送。
+- [x] A：新增容器专用 NDJSON stdin/stdout 入口，复用 `executeDispatch`；Secret 只进入启动帧，限制帧大小、重复启动、EOF 和取消；原本机 IPC 保持兼容。
+- [x] B：新增 `cloud` 契约和 Kysely 表；现有标识全部沿用 TEXT，保留 `baseUrlRef` 和可组合 ZodObject；容器事件通过独立、认证的 lifecycle 接口发送，不作为 Run 状态。
+- [x] C：新增一次性内存 Secret Broker、Docker 适配器和不可变快照存储；宿主解析 Keychain，容器不读取宿主凭证；快照物化完整工作目录，校验路径、哈希、数量、字节及敏感文件。
+- [x] D：Handoff API 只创建请求；源 Daemon 确认无活动 Worker、Outbox 已排空后导出快照并登记。控制面不访问 Docker 或源文件系统；目标 Checkpoint 创建新 ID 并绑定新 Session，不放开一般跨 Session 恢复规则。
+- [x] E：Daemon 加 cloud 执行模式，使用宿主 Docker 创建独立 Session 容器；`control` 轮询同时续租，生命周期和 Progress 继续回传控制面。容器工作区留在私有持久目录供工件读取。
+- [x] F：恢复时检查拥有者标签和确定性容器名；已有容器只重连日志，不重复消费租约或重新启动模型。失联/租约失效进入 `reconnecting` 或 `waiting_input`；绝不无条件重建已经执行过的容器。
+- [x] G：增加 Runtime 镜像及显式 cloud 配置；Cloud Executor 留在宿主，解决 macOS Keychain、loopback HTTP 和 Docker bind 路径问题。默认容器网络 `none`，需要模型网络时必须由本机可信配置指定网络。
+- [x] H：契约、数据库、真实 Docker、全仓 493 项回归通过，Reviewer 为 `approve`；验收文档和交付记录已归档，推送结果以本会话最终 Git 输出为准。
+
+最终交付范围与保留限制见 `docs/phase-2a-review.md`。下方原始 Task 1–10 不再作为完成度统计依据。
 
 执行分工：A 由 Runtime 开发在隔离工作树实施，B/D 由控制面开发在隔离工作树实施，C 由容器适配开发在隔离工作树实施，项目经理负责 E/F/G 集成和 H 门禁。每项必须先观察失败测试再实现，通过后以独立提交集成。用户文件 `docs/study.html` 始终排除。
 

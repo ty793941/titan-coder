@@ -27,7 +27,7 @@ describe('cloud worker packaging', () => {
     const guide = await readFile(new URL('infra/cloud-daemon.md', repository), 'utf8');
     expect(guide).toContain('keychain://titan-qwen');
     expect(guide).toContain('bridge');
-    expect(guide).toContain('主代理');
+    expect(guide).toContain('handoff.snapshotRoot');
   });
 
   it('copies the pinned pnpm into the final worker stage and verifies it as the worker user', async () => {

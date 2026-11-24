@@ -1,6 +1,6 @@
 # 本机 Cloud Worker 镜像与配置
 
-本切片提供 Docker adapters、真实 container-worker 镜像和宿主 Daemon 配置样例。宿主 Daemon 的 `environmentType=cloud` 配置解析、调度、租约消费及 cloud-executor 由主代理集成；此处不修改 daemon-runner/client，也不宣称该配置已接通云执行。
+本切片提供 Docker adapters、真实 container-worker 镜像和宿主 Daemon 配置样例。宿主 Daemon 已接通 `environmentType=cloud`、租约消费、容器执行、恢复和 Handoff；完整操作与验证命令见 `docs/cloud-worker-acceptance.md`。
 
 ## 构建与版本
 
@@ -20,7 +20,9 @@ docker build --pull=false -f apps/agent-runtime/Dockerfile -t titan-session:phas
 
 复制并调整 `infra/cloud-daemon.example.json` 中的绝对路径。先由当前非 root 宿主用户创建 state、snapshots 和 workspaces 目录；snapshotRoot 的父目录必须已存在。所有受控目录由该用户拥有，不可对其他用户开放写权限。snapshotRoot 是本机模拟的共享目录，源 Daemon 和 cloud Daemon 必须访问同一个目录；公共 manifest 不包含宿主路径。
 
-Session 的执行配置通过 Control Plane 引用凭证，例如 Qwen 使用 `credentialRef: keychain://titan-qwen`，Codex 使用 `credentialRef: keychain://titan-openai` 和 `baseUrlRef: keychain://titan-openai-base-url`。这些是 macOS Keychain 引用；API Key 和 Provider URL 不放入宿主配置、镜像、普通环境变量或命令行。宿主 SecretBroker 只在内存消费 lease，主代理负责先完成 CP lease 的单次消费；随后用容器 stdin 注入一次 bootstrap，并关闭 stdin。
+Session 的执行配置通过 Control Plane 引用凭证，例如 Qwen 使用 `credentialRef: keychain://titan-qwen`，Codex 使用 `credentialRef: keychain://titan-openai` 和 `baseUrlRef: keychain://titan-openai-base-url`。这些是 macOS Keychain 引用；API Key 和 Provider URL 不放入宿主配置、镜像、普通环境变量或命令行。Cloud Executor 先确认 CP lease 的单次消费，宿主 SecretBroker 再解析凭证，随后用容器 stdin 注入一次 bootstrap，并关闭 stdin。
+
+源端本机 Daemon 通过 `handoff.snapshotRoot` 启用快照导出；它与 Cloud Daemon 使用同一个 Snapshot 目录，但必须使用不同的 state 目录和设备身份。
 
 默认 `cloud.network=none` 用于离线验收。真实模型调用需要宿主信任策略显式批准，将该字段改为 `bridge` 或批准的专用网络；不提供自动开启网络的行为。配置中 `baseUrl` 是 Control Plane 地址，不是模型 Provider URL。
 
@@ -60,10 +62,8 @@ TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_RUNTIME_TEST_IMAGE=titan-session:worker-smoke 
 
 ## 本次验证状态
 
-2026-11-24：源码已在 Node.js 22.23.5 下通过类型构建；契约、快照竞争和打包配置的 25 项定向测试通过。完整镜像两次构建分别达到 4 分钟、5 分钟总时限，官方 Linux Codex npm 安装未完成。宿主临时代理 `127.0.0.1:7890` 可连接，但官方包范围下载仅约 106 KB/s，没有将代理写入镜像。
+2026-11-24：完整 `titan-session:phase2a` 镜像已从源码构建成功，包含 Linux Codex `0.172.0` 和 pnpm `10.34.5`。此前宿主 `.tsbuildinfo` 被带入构建上下文导致的缺少输出问题，已通过 Docker ignore 排除增量编译缓存修复。
 
-worker stage 的第三次有界构建完成了 npm 依赖下载，但在 agent-core 的 TypeScript 构建中报 `Cannot find module '@titan/contracts'`；根 context 的源码构建配方仍未通过。后续使用宿主 pnpm deploy 的生产依赖，通过 `Dockerfile.offline` 成功生成独立镜像 `titan-session:worker-smoke`，镜像 ID 为 `sha256:a34c0d5744a5710eba39f6b94550eff80b39f8b5a876c88c290c181a4236e59f`。
+Node 22.23.5 下开启全部 Docker、Handoff 和原生 Codex 测试的全仓验收为 493 项通过、0 跳过。真实镜像验证覆盖缺凭证 Runtime、恢复日志、非 root、只读根、断网、tmpfs、pnpm 版本、实际 `pnpm test` 和 Linux Codex 版本。未使用真实模型 Key 或调用付费 Provider。
 
-该离线镜像在真实 Linux 容器中通过 Qwen 缺凭证 dispatch：stdout 顺序为 running、waiting_input、result waiting_input，退出码 0。相同测试还通过重建 adapter 的 find/inspect/logs 恢复、只读根目录、非 root 宿主 UID:GID、cap-drop/no-new-privileges、默认断网及 tmpfs 可写检查。真实镜像集成测试为 1 项通过、1 项跳过；跳过的是 Linux Codex CLI 版本检查，因为该离线镜像不含 Codex。完整 `titan-session:phase2a` 镜像和 Linux Codex 验收仍未完成，不能以 worker-smoke 替代。
-
-CloudExecutor 传递给 `LocalSnapshotStore.materialize()` 的 manifest 必须保留 `sha256:` 前缀；adapter 的 manifest 校验及 exact-bytes checksum 比较均要求该格式，不接受先 strip 前缀后的值。Daemon package 的 `@titan/agent-core` workspace 依赖需与主代理新增的 `@titan/agent-runtime` 依赖同时保留。
+CloudExecutor 传递给 `LocalSnapshotStore.materialize()` 的 manifest 保留 `sha256:` 前缀。源码构建的 worker stage 包含 pnpm；仅复制部署目录的 `Dockerfile.offline` 不包含 pnpm 和 Codex，只能用于缺凭证入口检查，不能替代完整镜像验收。使用离线配方时，测试加上 `-t 'runs missing-credential'` 以限定其验证范围。

@@ -29,7 +29,7 @@ docker run --rm --network=none --read-only --user=1000:1000 --tmpfs /tmp:rw,nosu
 - `network: "none"` 用于离线验收；真实模型调用需要显式改为受信网络。
 - `credentialEnv: []`，模型 Key 和 Provider URL 只使用 Keychain 引用。
 
-源端本机 Daemon 可以在同一进程配置中启用 `handoff.snapshotRoot`，也可以使用单独的本机 Daemon 配置。源 Daemon 和 Cloud Daemon 必须能访问同一个受控 Snapshot 目录。
+源端本机 Daemon 在自己的配置中启用 `handoff.snapshotRoot`；Cloud Daemon 使用独立配置、设备身份和 state 目录。二者必须能访问同一个受控 Snapshot 目录。
 
 ## Handoff 流程
 
@@ -63,9 +63,9 @@ Content-Type: application/json
 检查以下内容：
 
 - `docker inspect` 的容器使用非 root UID、只读根文件系统、`cap-drop=ALL`、`no-new-privileges`、默认 `network=none` 和受限 `/tmp` tmpfs。
-- 容器 argv、Docker environment、Progress、Event、Artifact、Checkpoint、Cloud Worker state 和普通日志中没有 API Key、Provider URL 或 Daemon Token。
+- API Key 和 Provider URL 不进入容器 argv、Docker environment、Progress、Event、Artifact、Checkpoint、Daemon state 或普通日志。Daemon 设备令牌和执行领取证明只允许存在宿主私有状态文件及认证通道中，不进入公共事件和普通日志。
 - Secret Lease 只能被绑定 Session 消费一次；过期、撤销和重复消费都会失败。
-- Snapshot Manifest 只包含 `snapshot://` 引用、Git revision、`sha256:` 校验和、文件数量及总大小，不包含宿主工作区路径。
+- Snapshot Manifest 只包含快照 ID、Git revision、`sha256:` 校验和、文件数量及总大小，不包含宿主工作区路径；执行配置通过 `snapshot://` 引用它。
 - Artifact 只能落在 `<cloudWorkspaceRoot>/<sessionId>/session/.titan/artifacts/`，正文读取会再次校验路径、inode 和 checksum。
 - 容器退出后不会立即删除：必须先由 Control Plane 接收终态 Progress，Daemon Outbox 完成 ACK，之后 Cloud Executor 才清理容器；工作区和已归档工件保留。
 
@@ -75,7 +75,8 @@ Content-Type: application/json
 - Cloud Executor 重启时，只能重新连接拥有者一致且仍存在的容器；不会重新消费 Secret Lease 或重复启动模型。
 - 容器缺失、Snapshot 校验失败、Lease 过期和容器超时会产生稳定错误码，并保留源 Session 和 Handoff 事实。
 - Handoff 使用幂等键；重复请求返回同一 Handoff 和目标 Session。源 Session 出现更新的 Run 后，旧 Run 的 Snapshot ACK 会被拒绝。
-- 取消操作先由 Control Plane 设置取消意图，Cloud Executor 停止并确认容器后再提交 `cancelled`。
+- 管理取消会记录取消状态并撤销租约，Cloud Executor 在轮询到取消后停止容器、确认退出并收尾。已 fencing 的旧 Progress 只能凭匹配的控制面证明写入私有 discard 审计，不能更新业务事实或阻塞 Daemon 队列。
+- 本阶段拒绝 cloud Run 的 pause 操作，返回 `403 PERMISSION_DENIED`，原因 `CLOUD_PAUSE_UNSUPPORTED`，所有状态保持不变。本机暂停与本机到云端 Handoff 保持可用。
 
 ## 自动化验收
 
@@ -96,6 +97,18 @@ TITAN_CLOUD_E2E=1 pnpm --filter @titan/control-plane test -- cloud-daemon.e2e.te
 ```
 
 真实 Docker E2E 使用本地 fixture Runtime，不调用付费模型；它验证源 Daemon、Cloud Executor、容器、Snapshot、Checkpoint、Artifact、Secret 边界和清理时序。Runtime 镜像 smoke 会在非 root、只读根和断网条件下验证 pnpm 固定版本并实际执行无依赖 fixture 的 `pnpm test`。完整 Linux Codex 镜像 smoke 会额外验证固定 Codex 版本，但不会调用 Provider。
+
+全仓真实验收时，Turbo 需要显式传递测试开关；按包串行、每包最多两个 Worker 可避免多个数据库初始化并行争用：
+
+```bash
+TITAN_CLOUD_E2E=1 TITAN_REAL_DOCKER_TESTS=1 \
+TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_CODEX_IMAGE_TESTS=1 \
+TITAN_RUNTIME_TEST_IMAGE=titan-session:phase2a \
+TITAN_CODEX_BINARY=/absolute/path/to/codex \
+pnpm exec turbo run test --force --concurrency=1 --env-mode=loose -- --maxWorkers=2 --testTimeout=15000
+```
+
+2026-11-24 在 Node 22.23.5 下执行该门禁：493 项通过，0 项跳过；构建、类型检查、Lint 和 OpenAPI 一致性检查通过。最终只读评审结论为 `approve`。真实 Provider 的付费推理未执行。
 
 ## 当前边界
 
