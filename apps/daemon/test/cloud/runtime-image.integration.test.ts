@@ -15,7 +15,7 @@ describe.skipIf(!enabled)('real container worker image', () => {
     expect(docker([...options, '--entrypoint=pnpm', image, '--version'])).toBe('10.34.5');
     const setup = `const fs = require('node:fs'); fs.writeFileSync('/tmp/package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5', scripts: { test: 'node smoke.cjs' } })); fs.writeFileSync('/tmp/smoke.cjs', 'console.log("trusted-code-smoke-ok")')`;
     expect(docker([...options, '--workdir=/tmp', '--entrypoint=sh', image, '-c', 'node -e "$1" && pnpm test', 'pnpm-smoke', setup])).toContain('\ntrusted-code-smoke-ok');
-  });
+  }, 60_000);
 
   it('runs missing-credential dispatch to waiting_input with recoverable logs and read-only isolation', async () => {
     const metadata = JSON.parse(docker(['image', 'inspect', image]))[0];
