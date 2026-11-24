@@ -131,9 +131,11 @@ export const cloudProgressFenceSchema = z.object({
   daemonId: identifier,
   runId: identifier,
   eventId: identifier,
-  jobStatus: z.literal('blocked'),
-  runStatus: z.literal('reconnecting'),
-}).strict();
+  jobStatus: z.enum(['blocked', 'cancelled']),
+  runStatus: z.enum(['reconnecting', 'cancelled']),
+}).strict().refine(value => (value.jobStatus === 'cancelled') === (value.runStatus === 'cancelled'), {
+  message: 'cloud fence job and run states must match',
+});
 export type CloudProgressFence = z.infer<typeof cloudProgressFenceSchema>;
 
 export const daemonRegistrationSchema = z.object({

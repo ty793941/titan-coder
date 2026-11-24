@@ -163,12 +163,19 @@ export class ExecutionService {
       if (!job) throw new DomainError('RESOURCE_NOT_FOUND', 'execution job was not found');
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirstOrThrow();
       const isCloud = executionConfigSchema.parse(job.config).environmentType === 'cloud';
-      const fenced = () => new DomainError('PERMISSION_DENIED', 'cloud progress is fenced', {
+      const fenced = (jobStatus: 'blocked' | 'cancelled' = 'blocked') => new DomainError('PERMISSION_DENIED', 'cloud progress is fenced', {
         reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId, runId, eventId: input.eventId,
-        jobStatus: 'blocked', runStatus: 'reconnecting',
+        jobStatus, runStatus: jobStatus === 'cancelled' ? 'cancelled' : 'reconnecting',
       });
       if (isCloud && job.status === 'blocked' && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null &&
         run.status === 'reconnecting' && run.error_code === 'CLOUD_WORKER_DISCONNECTED') return fenced();
+      if (isCloud && job.status === 'cancelled' && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null && run.status === 'cancelled') {
+        // 管理取消可覆盖运行状态；只能凭同一执行的持久隔离事实继续拒绝旧进度。
+        const proof = await trx.selectFrom('cloud_execution').select('id').where('run_id', '=', runId).where('daemon_id', '=', daemonId)
+          .where('session_id', '=', run.session_id).where('status', '=', 'cancelled').where('error_code', '=', 'CLOUD_WORKER_DISCONNECTED')
+          .where('lease_expires_at', 'is', null).executeTakeFirst();
+        if (proof) return fenced('cancelled');
+      }
       if (!sameToken(claimToken, job.claim_token_hash)) throw new DomainError('PERMISSION_DENIED', 'invalid claim token');
       if (isCloud && daemonStatus(daemon) !== 'ready') {
         await this.cloud.disconnect(trx, runId);

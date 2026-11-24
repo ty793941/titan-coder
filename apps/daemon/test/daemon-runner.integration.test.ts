@@ -119,7 +119,7 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
 }
 
 describe('DaemonRunner real HTTP and child IPC', () => {
-  it('discards only fenced cloud progress, waits for container stop, and continues heartbeats and claims across restart', async () => {
+  it.each(['reconnecting', 'manager-cancel'])('discards only fenced cloud progress, waits for container stop, and continues heartbeats and claims across restart: %s', async mode => {
     const h = await harness();
     execFileSync('git', ['init', '--quiet', h.workspace]);
     execFileSync('git', ['-C', h.workspace, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
@@ -155,9 +155,11 @@ describe('DaemonRunner real HTTP and child IPC', () => {
     let resolutions = 0;
     const session = h.start({ credentialResolver: async () => ++resolutions === 1 ? 'private-test-key' : undefined });
     await until(() => h.attempts.length > 0);
+    let managerCancelled = false;
     h.denyProgress('run-1', progress => ({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud',
-      daemonId: 'daemon-1', runId: 'run-1', eventId: progress.eventId, jobStatus: 'blocked', runStatus: 'reconnecting' } }));
-    h.fence('run-1');
+      daemonId: 'daemon-1', runId: 'run-1', eventId: progress.eventId,
+      jobStatus: managerCancelled ? 'cancelled' : 'blocked', runStatus: managerCancelled ? 'cancelled' : 'reconnecting' } }));
+    if (mode === 'reconnecting') h.fence('run-1');
     h.offline(false);
     await until(() => stop.mock.calls.length > 0 || session.errors.length > 0);
     const heartbeats = h.heartbeats();
@@ -169,6 +171,8 @@ describe('DaemonRunner real HTTP and child IPC', () => {
     expect(session.errors).toEqual([]);
     expect(remove).not.toHaveBeenCalled();
     expect(h.claimTimes).toHaveLength(1);
+    await until(async () => (await readFile(join(h.options.stateDirectory, 'outbox.jsonl'), 'utf8')).includes('"operation":"discard"'));
+    managerCancelled = mode === 'manager-cancel';
     allowStop();
     await until(() => h.events.some(event => event.type === 'waiting_input') || session.errors.length > 0);
     expect(session.errors).toEqual([]);
@@ -182,6 +186,11 @@ describe('DaemonRunner real HTTP and child IPC', () => {
     const discarded = records.filter(record => record.operation === 'discard');
     expect(discarded.length).toBeGreaterThanOrEqual(2);
     expect(discarded.every(record => record.fence.runId === 'run-1' && record.fence.reason === 'CLOUD_PROGRESS_FENCED')).toBe(true);
+    if (managerCancelled) {
+      expect(discarded[0].fence).toMatchObject({ jobStatus: 'blocked', runStatus: 'reconnecting' });
+      expect(discarded.at(-1).fence).toMatchObject({ jobStatus: 'cancelled', runStatus: 'cancelled' });
+      expect(h.attempts.some(event => event.type === 'cancelled')).toBe(true);
+    }
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(remove).toHaveBeenCalledTimes(2);
     const attempts = h.attempts.length;

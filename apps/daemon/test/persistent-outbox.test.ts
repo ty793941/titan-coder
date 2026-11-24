@@ -35,7 +35,7 @@ describe('PersistentOutbox', () => {
     expect((await PersistentOutbox.open(path)).pending()).toEqual([]);
   });
 
-  it('durably audits a fenced event discard without acknowledging another run', async () => {
+  it.each(['reconnecting', 'cancelled'] as const)('durably audits a fenced event discard without acknowledging another run: %s', async status => {
     const root = await mkdtemp(join(tmpdir(), 'titan-outbox-'));
     const path = join(root, 'outbox.jsonl');
     const outbox = await PersistentOutbox.open(path);
@@ -43,7 +43,7 @@ describe('PersistentOutbox', () => {
     const other = { ...event, runId: 'other-run', progress: { ...event.progress, eventId: 'other' } };
     await outbox.append(event); await outbox.append(other);
     const fence = { reason: 'CLOUD_PROGRESS_FENCED' as const, environmentType: 'cloud' as const, daemonId: 'daemon', runId: 'fenced-run',
-      eventId: 'stale', jobStatus: 'blocked' as const, runStatus: 'reconnecting' as const };
+      eventId: 'stale', jobStatus: status === 'cancelled' ? 'cancelled' as const : 'blocked' as const, runStatus: status };
     await expect(outbox.discardFenced('stale', { ...fence, runId: 'other-run' })).rejects.toThrow('OUTBOX_FENCE_MISMATCH');
     expect(outbox.pending()).toHaveLength(2);
     await outbox.discardFenced('stale', fence);

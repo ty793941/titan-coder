@@ -4,6 +4,16 @@ import * as contracts from '../src/schemas.js';
 const local = { daemonId: 'daemon_1', runtime: 'codex', credentialRef: 'keychain://codex', baseUrlRef: 'keychain://url', workspacePath: '/repo', allowedTools: ['artifact.write'], maxTurns: 10, timeoutMs: 10000 };
 
 describe('cloud contracts', () => {
+  it('accepts only paired reconnecting or cancelled cloud fence states', () => {
+    const fence = { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: 'daemon_1', runId: 'run_1', eventId: 'event_1' };
+    for (const states of [{ jobStatus: 'blocked', runStatus: 'reconnecting' }, { jobStatus: 'cancelled', runStatus: 'cancelled' }]) {
+      expect(contracts.cloudProgressFenceSchema.parse({ ...fence, ...states })).toEqual({ ...fence, ...states });
+    }
+    for (const states of [{ jobStatus: 'blocked', runStatus: 'cancelled' }, { jobStatus: 'cancelled', runStatus: 'reconnecting' }, { jobStatus: 'claimed', runStatus: 'running' }]) {
+      expect(contracts.cloudProgressFenceSchema.safeParse({ ...fence, ...states }).success).toBe(false);
+    }
+  });
+
   it('keeps execution config composable and retains local defaults and URL references', () => {
     expect(contracts.executionConfigSchema.shape.baseUrlRef).toBeDefined();
     expect(contracts.executionConfigSchema.omit({ credentialRef: true }).shape.runtime).toBeDefined();

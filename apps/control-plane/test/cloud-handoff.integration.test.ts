@@ -109,6 +109,68 @@ describe('bounded cloud control plane', () => {
     expect(job.claim_token_hash).toBeTruthy();
   });
 
+  it.each(['cloud-execution', 'run'])('keeps rejecting stale progress with a verifiable fence after management cancels the fenced %s', async target => {
+    const f = await ready();
+    const runId = f.dispatch.runId;
+    const path = `/api/daemons/${f.target.daemonId}/runs/${runId}/progress`;
+    await api.db.updateTable('cloud_execution').set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', runId).execute();
+    const first = await api.post(path).set('Authorization', auth(f.target.authToken))
+      .send({ claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'running', payload: {} }).expect(403);
+    expect(first.body.details).toMatchObject({ reason: 'CLOUD_PROGRESS_FENCED', jobStatus: 'blocked', runStatus: 'reconnecting' });
+    const cancelPath = target === 'run' ? `/api/runs/${runId}/cancel` : `/api/cloud-executions/${f.dispatch.cloud.executionId}/cancel`;
+    await api.post(cancelPath).set('Authorization', auth(consoleToken)).send({}).expect(200);
+    const state = async () => ({
+      job: await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', runId).executeTakeFirstOrThrow(),
+      run: await api.db.selectFrom('run').selectAll().where('id', '=', runId).executeTakeFirstOrThrow(),
+      session: await api.db.selectFrom('session').selectAll().where('id', '=', f.dispatch.sessionId).executeTakeFirstOrThrow(),
+      cloud: await api.db.selectFrom('cloud_execution').selectAll().where('run_id', '=', runId).executeTakeFirstOrThrow(),
+      events: await api.db.selectFrom('event').selectAll().where('run_id', '=', runId).orderBy('sequence').execute(),
+    });
+    const before = await state();
+    expect(before.job).toMatchObject({ status: 'cancelled', claim_token_hash: null, lease_expires_at: null, cancel_requested: true });
+    expect(before.run.status).toBe('cancelled');
+    expect(before.cloud).toMatchObject({ status: 'cancelled', error_code: 'CLOUD_WORKER_DISCONNECTED', daemon_id: f.target.daemonId });
+    for (const type of ['cancelled', 'completed']) {
+      const eventId = randomUUID();
+      const checkpoint = { id: `cp_${randomUUID()}`, messages: [], successfulTools: [], evidence: [] };
+      const rejected = await api.post(path).set('Authorization', auth(f.target.authToken))
+        .send({ claimToken: f.dispatch.claimToken, eventId, sequence: 2, type, payload: {}, checkpoint }).expect(403);
+      expect(rejected.body).toMatchObject({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud',
+        daemonId: f.target.daemonId, runId, eventId, jobStatus: 'cancelled', runStatus: 'cancelled' } });
+      expect(await api.db.selectFrom('execution_progress').selectAll().where('event_id', '=', eventId).execute()).toEqual([]);
+      expect(await api.db.selectFrom('checkpoint').selectAll().where('id', '=', checkpoint.id).execute()).toEqual([]);
+    }
+    expect(await state()).toEqual(before);
+    await api.post(`/api/daemons/${f.source.daemonId}/runs/${runId}/progress`).set('Authorization', auth(f.source.authToken))
+      .send({ claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 2, type: 'cancelled', payload: {} }).expect(404);
+  });
+
+  it.each(['no-fence', 'live-claim', 'different-daemon'])('does not issue a cancellation fence without matching durable proof: %s', async mode => {
+    const f = await ready();
+    const runId = f.dispatch.runId;
+    await api.db.updateTable('cloud_execution').set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', runId).execute();
+    const path = `/api/daemons/${f.target.daemonId}/runs/${runId}/progress`;
+    await api.post(path).set('Authorization', auth(f.target.authToken))
+      .send({ claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'running', payload: {} }).expect(403);
+    await api.post(`/api/cloud-executions/${f.dispatch.cloud.executionId}/cancel`).set('Authorization', auth(consoleToken)).send({}).expect(200);
+    if (mode === 'no-fence') await api.db.updateTable('cloud_execution').set({ error_code: null }).where('run_id', '=', runId).execute();
+    if (mode === 'live-claim') await api.db.updateTable('execution_job').set({ claim_token_hash: createHash('sha256').update('another-claim').digest('hex') }).where('run_id', '=', runId).execute();
+    if (mode === 'different-daemon') await api.db.updateTable('cloud_execution').set({ daemon_id: f.source.daemonId }).where('run_id', '=', runId).execute();
+    const denied = await api.post(path).set('Authorization', auth(f.target.authToken))
+      .send({ claimToken: 'wrong-token', eventId: randomUUID(), sequence: 2, type: 'cancelled', payload: {} }).expect(403);
+    expect(denied.body).toMatchObject({ code: 'PERMISSION_DENIED', details: {} });
+    expect(denied.body.details.reason).toBeUndefined();
+  });
+
+  it('does not turn an ordinary manager cancellation into a fence for an invalid cloud claim', async () => {
+    const f = await ready();
+    await api.post(`/api/cloud-executions/${f.dispatch.cloud.executionId}/cancel`).set('Authorization', auth(consoleToken)).send({}).expect(200);
+    const denied = await api.post(`/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`).set('Authorization', auth(f.target.authToken))
+      .send({ claimToken: 'wrong-token', eventId: randomUUID(), sequence: 1, type: 'cancelled', payload: {} }).expect(403);
+    expect(denied.body).toMatchObject({ code: 'PERMISSION_DENIED', details: {} });
+    expect(denied.body.details.reason).toBeUndefined();
+  });
+
   it.each(['execution_job', 'cloud_execution'] as const)('commits a fence before rejecting direct progress with an expired %s lease', async table => {
     const f = await ready();
     await api.db.updateTable(table).set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', f.dispatch.runId).execute();
