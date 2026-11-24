@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile, symlink, realpath, stat, rename, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, symlink, realpath, stat, rename, chmod, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { LocalSnapshotStore } from '../../src/cloud/snapshot-store.js';
+import { cloudSnapshotManifestSchema } from '@titan/contracts';
+import { initializeSnapshotRepository } from './snapshot-fixture.js';
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'titan-cloud-snapshot-')));
   const source = join(root, 'source');
   const snapshots = join(root, 'snapshots');
   await mkdir(source, { mode: 0o700 });
+  initializeSnapshotRepository(source);
   const store = new LocalSnapshotStore({ root: snapshots, workspaceRoots: [root] });
   return { root, source, snapshots, store };
 }
@@ -18,8 +21,6 @@ async function fixture() {
 describe('LocalSnapshotStore', () => {
   it('roundtrips full current bytes, including untracked files, through a fresh store', async () => {
     const { root, source, snapshots, store } = await fixture();
-    execFileSync('git', ['init', '-q', source]);
-    execFileSync('git', ['-C', source, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'baseline']);
     await writeFile(join(source, 'current.bin'), Buffer.from([0, 1, 2, 255]));
     await mkdir(join(source, 'src'));
     await writeFile(join(source, 'src', 'app.ts'), 'export const answer = 42;\n');
@@ -27,7 +28,8 @@ describe('LocalSnapshotStore', () => {
     expect(Object.keys(manifest).sort()).toEqual(['baseRevision', 'checksum', 'fileCount', 'schemaVersion', 'snapshotId', 'totalBytes']);
     expect(manifest.baseRevision).toBe(execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
     const bytes = await readFile(join(snapshots, `${manifest.snapshotId}.json`));
-    expect(manifest.checksum).toBe(createHash('sha256').update(bytes).digest('hex'));
+    expect(manifest.checksum).toBe(`sha256:${createHash('sha256').update(bytes).digest('hex')}`);
+    expect(cloudSnapshotManifestSchema.parse(manifest)).toEqual(manifest);
     expect(manifest.fileCount).toBe(2);
     const destination = join(root, 'materialized');
     await new LocalSnapshotStore({ root: snapshots, workspaceRoots: [root] }).materialize(manifest, destination);
@@ -39,7 +41,7 @@ describe('LocalSnapshotStore', () => {
   it('excludes metadata, dependencies, credentials, environment and linked files', async () => {
     const { source, store } = await fixture();
     for (const name of ['.git', '.titan', '.humanlayer', '.codegraph', 'node_modules', 'dist', 'coverage', 'credentials']) {
-      await mkdir(join(source, name));
+      await mkdir(join(source, name), { recursive: true });
       await writeFile(join(source, name, 'private'), 'secret=hidden');
     }
     for (const name of ['.env', '.env.development', 'private.pem', 'id_rsa', 'service-account.json', 'api-key.txt', 'auth.json', '.npmrc', '.netrc', 'keys.json']) await writeFile(join(source, name), 'secret=hidden');
@@ -93,7 +95,7 @@ describe('LocalSnapshotStore', () => {
     if (kind === 'ancestor') pack.files.push({ path: 'safe/child', content: 'YQ==' });
     const bytes = Buffer.from(JSON.stringify(pack));
     await writeFile(path, bytes);
-    const changed = { ...manifest, checksum: createHash('sha256').update(bytes).digest('hex') };
+    const changed = { ...manifest, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
     await expect(store.materialize(changed, join(root, 'target'))).rejects.toThrow(/CLOUD_SNAPSHOT_/);
     await expect(stat(join(root, 'target'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -131,5 +133,16 @@ describe('LocalSnapshotStore', () => {
     const store = new LocalSnapshotStore({ root: join(source, '.titan', 'snapshots'), workspaceRoots: [root] });
     await writeFile(join(source, 'safe'), 'safe');
     expect((await store.exportWorkspace(source)).fileCount).toBe(1);
+  });
+
+  it.each(['safe', 'api_key=fixture-value'])('requires a Git revision before scanning content (%s)', async content => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'titan-cloud-no-revision-')));
+    const source = join(root, 'source');
+    const snapshots = join(root, 'snapshots');
+    await mkdir(source);
+    await writeFile(join(source, 'safe'), content);
+    const store = new LocalSnapshotStore({ root: snapshots, workspaceRoots: [root] });
+    await expect(store.exportWorkspace(source)).rejects.toThrow('CLOUD_SNAPSHOT_REVISION');
+    expect(await readdir(snapshots)).toEqual([]);
   });
 });

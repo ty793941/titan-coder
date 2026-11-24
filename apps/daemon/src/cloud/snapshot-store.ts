@@ -3,7 +3,7 @@ import type { Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { containsSensitive, containsSensitivePath, containsUnsafePath } from '../../../../packages/agent-core/dist/security.js';
+import { containsSensitive, containsSensitivePath, containsUnsafePath } from '@titan/agent-core';
 import type { CloudSnapshotManifest } from './types.js';
 
 export type { CloudSnapshotManifest } from './types.js';
@@ -14,7 +14,7 @@ const MAX_FILES = 10_000;
 const MAX_PACKAGE = 64 * MAX_FILE;
 const excludedNames = new Set(['.git', '.titan', '.humanlayer', '.codegraph', 'node_modules', 'dist', 'coverage', 'credentials', '.ssh', '.aws', '.gnupg', '.npmrc', '.netrc']);
 const noFollow = process.platform === 'darwin' ? 0x20000000 : constants.O_NOFOLLOW;
-const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const hash = (bytes: Uint8Array) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 function fail(kind: string): never { throw new Error(`CLOUD_SNAPSHOT_${kind}`); }
 const inside = (root: string, path: string) => { const child = relative(root, path); return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child); };
 const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
@@ -146,6 +146,12 @@ export class LocalSnapshotStore {
       const source = assertCloudDirectory(workspacePath);
       this.authorize(source);
       if (source === this.root || inside(this.root, source)) fail('PATH');
+      let baseRevision: string;
+      try {
+        const revision = execFileSync('git', ['-C', source, 'rev-parse', '--verify', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 256, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision)) fail('REVISION');
+        baseRevision = revision;
+      } catch { fail('REVISION'); }
       const files: SnapshotFile[] = [];
       let totalBytes = 0;
       const walk = (path: string, prefix: string, depth: number): void => {
@@ -179,11 +185,6 @@ export class LocalSnapshotStore {
       };
       walk(source, '', 0);
       this.authorize(source);
-      let baseRevision = 'unversioned';
-      try {
-        const revision = execFileSync('git', ['-C', source, 'rev-parse', '--verify', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 256, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-        if (/^[a-f0-9]{40,64}$/.test(revision)) baseRevision = revision;
-      } catch { /* 非 Git 工作区也允许完整快照。 */ }
       const snapshotId = randomUUID();
       const pack: SnapshotPackage = { schemaVersion: 1, snapshotId, baseRevision, files };
       const bytes = Buffer.from(JSON.stringify(pack));
@@ -258,8 +259,8 @@ export class LocalSnapshotStore {
 
   private validateManifest(value: CloudSnapshotManifest): void {
     if (!value || value.schemaVersion !== 1 || typeof value.snapshotId !== 'string' || !/^[a-f0-9-]{36}$/.test(value.snapshotId)
-      || typeof value.checksum !== 'string' || !/^[a-f0-9]{64}$/.test(value.checksum)
-      || typeof value.baseRevision !== 'string' || !/^(?:unversioned|[a-f0-9]{40,64})$/.test(value.baseRevision)
+      || typeof value.checksum !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value.checksum)
+      || typeof value.baseRevision !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.baseRevision)
       || !Number.isInteger(value.fileCount) || value.fileCount < 0 || value.fileCount > MAX_FILES
       || !Number.isInteger(value.totalBytes) || value.totalBytes < 0 || value.totalBytes > MAX_TOTAL) fail('INVALID');
   }

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, realpath, rename, stat, readdir } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalSnapshotStore } from '../../src/cloud/snapshot-store.js';
+import { initializeSnapshotRepository } from './snapshot-fixture.js';
 
 vi.mock('node:fs', async importOriginal => {
   const original = await importOriginal<typeof import('node:fs')>();
@@ -15,6 +16,7 @@ describe('snapshot path substitution', () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'titan-snapshot-race-')));
     const source = join(root, 'source');
     await mkdir(source);
+    initializeSnapshotRepository(source);
     const file = join(source, 'safe.txt');
     await writeFile(file, 'safe');
     await writeFile(join(root, 'outside'), 'outside');
@@ -36,6 +38,7 @@ describe('snapshot path substitution', () => {
     const authorized = join(root, 'authorized');
     await mkdir(authorized);
     await mkdir(join(authorized, 'source'));
+    initializeSnapshotRepository(join(authorized, 'source'));
     const store = new LocalSnapshotStore({ root: join(root, 'store'), workspaceRoots: [authorized] });
     const manifest = await store.exportWorkspace(join(authorized, 'source'));
     await rename(authorized, `${authorized}.old`);
@@ -50,6 +53,7 @@ describe('snapshot path substitution', () => {
     const parent = join(root, 'parent');
     const outside = join(root, 'outside');
     for (const path of [source, parent, outside]) await mkdir(path);
+    initializeSnapshotRepository(source);
     await writeFile(join(source, 'safe'), 'safe');
     const store = new LocalSnapshotStore({ root: join(root, 'store'), workspaceRoots: [root] });
     const manifest = await store.exportWorkspace(source);
@@ -72,6 +76,7 @@ describe('snapshot path substitution', () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'titan-snapshot-write-fail-')));
     const source = join(root, 'source');
     await mkdir(source);
+    initializeSnapshotRepository(source);
     await writeFile(join(source, 'a'), 'one');
     await writeFile(join(source, 'b'), 'two');
     const store = new LocalSnapshotStore({ root: join(root, 'store'), workspaceRoots: [root] });
@@ -88,6 +93,7 @@ describe('snapshot path substitution', () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'titan-snapshot-growth-')));
     const source = join(root, 'source');
     await mkdir(source);
+    initializeSnapshotRepository(source);
     const file = join(source, 'growing.bin');
     await writeFile(file, 'safe');
     const store = new LocalSnapshotStore({ root: join(root, 'store'), workspaceRoots: [root] });

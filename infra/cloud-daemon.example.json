@@ -1,0 +1,19 @@
+{
+  "baseUrl": "http://127.0.0.1:3000",
+  "stateDirectory": "/Users/your-user/.titan/cloud-daemon/state",
+  "machineName": "local-cloud-worker",
+  "environmentType": "cloud",
+  "cloud": {
+    "image": "titan-session:phase2a",
+    "snapshotRoot": "/Users/your-user/.titan/cloud-daemon/snapshots",
+    "workspaceRoot": "/Users/your-user/.titan/cloud-daemon/workspaces",
+    "network": "none"
+  },
+  "workspaceRoots": ["/Users/your-user/.titan/cloud-daemon/workspaces"],
+  "allowRuntime": ["codex", "qwen"],
+  "credentialEnv": [],
+  "localPolicy": {
+    "enabledSkills": [],
+    "trustedCode": false
+  }
+}
