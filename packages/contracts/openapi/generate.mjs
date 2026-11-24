@@ -80,6 +80,7 @@ const schemas = Object.fromEntries(Object.entries({
   CloudLifecycleRequest: source.cloudLifecycleRequestSchema,
   ExecutionCheckpoint: source.executionCheckpointSchema,
   RunProgress: source.runProgressSchema,
+  CloudProgressFence: source.cloudProgressFenceSchema,
   ProgressOutput: source.progressOutputSchema,
   ArtifactWriteOutput: source.artifactWriteOutputSchema,
   DaemonRegistration: source.daemonRegistrationSchema,
@@ -102,6 +103,11 @@ schemas.RunProgress.properties.checkpoint = ref('ExecutionCheckpoint');
 schemas.RunProgress.allOf = [{ if: { properties: { type: { const: 'checkpoint' } }, required: ['type'] }, then: { required: ['checkpoint'] } }];
 schemas.RunProgress.description = 'claimToken 是领取任务的租约证明，不是模型凭证。sequence 在单个 execution_job 内从 1 连续递增；eventId 全局唯一；payload.source 存在时需符合 ProgressOutput。';
 schemas.RunProgress['x-output-schema'] = ref('ProgressOutput');
+schemas.CloudProgressFence.oneOf = [
+  { properties: { jobStatus: { const: 'blocked' }, runStatus: { const: 'reconnecting' } } },
+  { properties: { jobStatus: { const: 'cancelled' }, runStatus: { const: 'cancelled' } } },
+];
+schemas.CloudProgressFence.description = '只允许cloud隔离后的blocked/reconnecting或cancelled/cancelled配对状态。daemonId、runId、eventId必须与本地待发送事件逐项匹配；证明仅用于私有Outbox审计丢弃，不表示控制面接收事件。';
 schemas.EventEnvelope.required.push('payload');
 schemas.EventEnvelope.properties.actor = ref('Actor');
 schemas.EventEnvelope.properties.sequence.maximum = Number.MAX_SAFE_INTEGER;
@@ -271,6 +277,8 @@ for (const action of ['pause', 'resume', 'cancel']) {
 paths['/api/daemons/{daemonId}/runs/{runId}/control'].get.description += ' cloud同时续期job和cloud_execution的120秒租约；任一过期或Daemon失联则隔离为blocked并持久标记reconnecting，停止信号为true。Secret Lease固定有效期不续期。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud还要求daemonStatus=ready；认证及领取证明有效但心跳失联时，即使执行租约未过期也拒收progress，先提交blocked/reconnecting、清除领取证明和租约、撤销Secret Lease及Outbox事实，再返回403 PERMISSION_DENIED，不续租、不完成Run。local保持既有行为。';
+paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' 已隔离cloud执行在后续用户取消后仍可返回受限CLOUD_PROGRESS_FENCED details：要求job取消标记为true、claim hash与lease均已清除、Run保留CLOUD_WORKER_DISCONNECTED，并核对同一Daemon/Session/Run的cloud_execution持久失联原因和空租约。仅blocked/reconnecting及cancelled/cancelled配对可提供证明；普通错误token、未隔离取消、其他Daemon作业不提供。客户端只可审计丢弃daemonId/runId/eventId完全匹配的事件，任意403不能触发丢弃。';
+paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post['x-fence-details-schema'] = ref('CloudProgressFence');
 paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.description += ' 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；源Session/Run仍须paused且checkpoint未变，旧Run再次paused不能绕过此校验。源状态或checkpoint失效时，先原子持久化Handoff failed、errorCode=HANDOFF_CHECKPOINT_INVALID、completedAt、version递增和handoff.failed Outbox事件，释放active Handoff并从pending移除，再返回400 HANDOFF_CHECKPOINT_INVALID、retryable=false；后续ACK返回409且不重复失败事件。目标暂不可用返回409 HANDOFF_TARGET_UNAVAILABLE、retryable=true，保留requested、版本和pending供重试。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。';
 paths['/api/artifacts/{artifactId}/content'].get.description += ' cloud工件仅允许创建来源为所属Daemon、关联真实cloud_execution的记录；宿主根从该Daemon唯一workspaceRoot推导到sessionId/session，读取时校验realpath仍为该根下精确Session目录，拒绝Session目录及工件目录符号链接逃逸。宿主文件需由Executor在容器退出后保留，CP不调用Docker。';

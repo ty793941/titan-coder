@@ -14,6 +14,14 @@ describe('cloud contracts', () => {
     }
   });
 
+  it('accepts only paired stopped cloud fence states including cancellation', () => {
+    const proof = { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: 'daemon_1', runId: 'run_1', eventId: 'event_1', jobStatus: 'cancelled', runStatus: 'cancelled' };
+    expect(contracts.cloudProgressFenceSchema.parse(proof)).toEqual(proof);
+    expect(contracts.cloudProgressFenceSchema.safeParse({ ...proof, jobStatus: 'blocked', runStatus: 'reconnecting' }).success).toBe(true);
+    for (const change of [{ jobStatus: 'blocked' }, { runStatus: 'reconnecting' }, { runStatus: 'completed' }, { jobStatus: 'claimed' }, { environmentType: 'local' }, { extra: 'untrusted' }]) {
+      expect(contracts.cloudProgressFenceSchema.safeParse({ ...proof, ...change }).success).toBe(false);
+    }
+  });
   it('keeps execution config composable and retains local defaults and URL references', () => {
     expect(contracts.executionConfigSchema.shape.baseUrlRef).toBeDefined();
     expect(contracts.executionConfigSchema.omit({ credentialRef: true }).shape.runtime).toBeDefined();

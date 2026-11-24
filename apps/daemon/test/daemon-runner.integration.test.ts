@@ -119,6 +119,32 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
 }
 
 describe('DaemonRunner real HTTP and child IPC', () => {
+  it('drains cancelled fence proofs from an existing outbox and resumes polling without Docker', async () => {
+    const h = await harness();
+    h.options.environmentType = 'cloud';
+    h.options.cloud = { image: 'titan-session:fixture', workspaceRoot: h.workspace, snapshotRoot: join(h.root, 'snapshots') };
+    h.pending.length = 0;
+    const path = join(h.options.stateDirectory, 'outbox.jsonl');
+    const outbox = await PersistentOutbox.open(path);
+    await outbox.append({ daemonId: 'daemon-1', runId: 'run-1', progress: { eventId: 'cancelled-old-event', sequence: 1, claimToken: 'old-claim', type: 'completed', payload: {} } });
+    h.denyProgress('run-1', progress => ({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: 'daemon-1', runId: 'run-1', eventId: progress.eventId, jobStatus: 'cancelled', runStatus: 'cancelled' } }));
+    const session = h.start();
+    await until(async () => !(await PersistentOutbox.open(path)).pending().length || session.errors.length > 0);
+    expect(session.errors).toEqual([]);
+    await until(() => h.claimTimes.length >= 2 && h.heartbeats() >= 2);
+    session.abort.abort();
+    await session.promise;
+    expect(session.errors).toEqual([]);
+    expect((await PersistentOutbox.open(path)).pending()).toEqual([]);
+    const attempts = h.attempts.length;
+    const heartbeats = h.heartbeats();
+    const restarted = h.start();
+    await until(() => h.heartbeats() > heartbeats);
+    restarted.abort.abort();
+    await restarted.promise;
+    expect(restarted.errors).toEqual([]);
+    expect(h.attempts).toHaveLength(attempts);
+  });
   it.each(['reconnecting', 'manager-cancel'])('discards only fenced cloud progress, waits for container stop, and continues heartbeats and claims across restart: %s', async mode => {
     const h = await harness();
     execFileSync('git', ['init', '--quiet', h.workspace]);
@@ -202,7 +228,7 @@ describe('DaemonRunner real HTTP and child IPC', () => {
     expect(h.attempts).toHaveLength(attempts);
   });
 
-  it.each(['local', 'cloud', 'wrong-run', 'wrong-event', 'wrong-status', 'wrong-code'])('stops and retains progress for an untrusted 403: %s', async mode => {
+  it.each(['local', 'cloud', 'wrong-run', 'wrong-event', 'wrong-daemon', 'wrong-status', 'wrong-code', 'mixed-status'])('stops and retains progress for an untrusted 403: %s', async mode => {
     const h = await harness();
     if (mode !== 'local') {
       h.options.environmentType = 'cloud';
@@ -212,8 +238,8 @@ describe('DaemonRunner real HTTP and child IPC', () => {
       await outbox.append({ daemonId: 'daemon-1', runId: 'run-1', progress: { eventId: 'old-event', sequence: 1, claimToken: 'claim', type: 'completed', payload: {} } });
     }
     h.denyProgress('run-1', progress => ({ code: mode === 'wrong-code' ? 'VALIDATION_FAILED' : 'PERMISSION_DENIED', details: mode === 'cloud' ? {} : {
-      reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: 'daemon-1', runId: mode === 'wrong-run' ? 'other' : 'run-1',
-      eventId: mode === 'wrong-event' ? 'other' : progress.eventId, jobStatus: 'blocked', runStatus: mode === 'wrong-status' ? 'running' : 'reconnecting',
+      reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: mode === 'wrong-daemon' ? 'other' : 'daemon-1', runId: mode === 'wrong-run' ? 'other' : 'run-1',
+      eventId: mode === 'wrong-event' ? 'other' : progress.eventId, jobStatus: 'blocked', runStatus: mode === 'wrong-status' ? 'running' : mode === 'mixed-status' ? 'cancelled' : 'reconnecting',
     } }));
     const session = h.start();
     await until(() => session.errors.length > 0);

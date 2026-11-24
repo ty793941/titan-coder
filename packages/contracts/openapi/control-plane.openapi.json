@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T06:15:13.306Z"
+    "generatedAt": "2026-11-24T07:33:46.843Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -1622,7 +1622,7 @@
       "post": {
         "operationId": "reportRunProgress",
         "summary": "上报 Run 进度与检查点",
-        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。 cloud还要求daemonStatus=ready；认证及领取证明有效但心跳失联时，即使执行租约未过期也拒收progress，先提交blocked/reconnecting、清除领取证明和租约、撤销Secret Lease及Outbox事实，再返回403 PERMISSION_DENIED，不续租、不完成Run。local保持既有行为。 cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。",
+        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。 cloud还要求daemonStatus=ready；认证及领取证明有效但心跳失联时，即使执行租约未过期也拒收progress，先提交blocked/reconnecting、清除领取证明和租约、撤销Secret Lease及Outbox事实，再返回403 PERMISSION_DENIED，不续租、不完成Run。local保持既有行为。 已隔离cloud执行在后续用户取消后仍可返回受限CLOUD_PROGRESS_FENCED details：要求job取消标记为true、claim hash与lease均已清除、Run保留CLOUD_WORKER_DISCONNECTED，并核对同一Daemon/Session/Run的cloud_execution持久失联原因和空租约。仅blocked/reconnecting及cancelled/cancelled配对可提供证明；普通错误token、未隔离取消、其他Daemon作业不提供。客户端只可审计丢弃daemonId/runId/eventId完全匹配的事件，任意403不能触发丢弃。 cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。",
         "security": [
           {
             "DaemonBearer": []
@@ -1690,6 +1690,9 @@
           "500": {
             "$ref": "#/components/responses/Error"
           }
+        },
+        "x-fence-details-schema": {
+          "$ref": "#/components/schemas/CloudProgressFence"
         }
       }
     },
@@ -3078,6 +3081,84 @@
         "x-output-schema": {
           "$ref": "#/components/schemas/ProgressOutput"
         }
+      },
+      "CloudProgressFence": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "const": "CLOUD_PROGRESS_FENCED"
+          },
+          "environmentType": {
+            "type": "string",
+            "const": "cloud"
+          },
+          "daemonId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "eventId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "jobStatus": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "runStatus": {
+            "type": "string",
+            "enum": [
+              "reconnecting",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "reason",
+          "environmentType",
+          "daemonId",
+          "runId",
+          "eventId",
+          "jobStatus",
+          "runStatus"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "jobStatus": {
+                "const": "blocked"
+              },
+              "runStatus": {
+                "const": "reconnecting"
+              }
+            }
+          },
+          {
+            "properties": {
+              "jobStatus": {
+                "const": "cancelled"
+              },
+              "runStatus": {
+                "const": "cancelled"
+              }
+            }
+          }
+        ],
+        "description": "只允许cloud隔离后的blocked/reconnecting或cancelled/cancelled配对状态。daemonId、runId、eventId必须与本地待发送事件逐项匹配；证明仅用于私有Outbox审计丢弃，不表示控制面接收事件。"
       },
       "ProgressOutput": {
         "type": "object",

@@ -167,14 +167,13 @@ export class ExecutionService {
         reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId, runId, eventId: input.eventId,
         jobStatus, runStatus: jobStatus === 'cancelled' ? 'cancelled' : 'reconnecting',
       });
-      if (isCloud && job.status === 'blocked' && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null &&
-        run.status === 'reconnecting' && run.error_code === 'CLOUD_WORKER_DISCONNECTED') return fenced();
-      if (isCloud && job.status === 'cancelled' && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null && run.status === 'cancelled') {
-        // 管理取消可覆盖运行状态；只能凭同一执行的持久隔离事实继续拒绝旧进度。
-        const proof = await trx.selectFrom('cloud_execution').select('id').where('run_id', '=', runId).where('daemon_id', '=', daemonId)
-          .where('session_id', '=', run.session_id).where('status', '=', 'cancelled').where('error_code', '=', 'CLOUD_WORKER_DISCONNECTED')
-          .where('lease_expires_at', 'is', null).executeTakeFirst();
-        if (proof) return fenced('cancelled');
+      const stoppedByFence = job.status === 'blocked' && run.status === 'reconnecting' || job.status === 'cancelled' && run.status === 'cancelled';
+      if (isCloud && stoppedByFence && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null && run.error_code === 'CLOUD_WORKER_DISCONNECTED') {
+        const execution = await trx.selectFrom('cloud_execution').select(['error_code', 'status', 'lease_expires_at'])
+          .where('run_id', '=', runId).where('session_id', '=', run.session_id).where('daemon_id', '=', daemonId).executeTakeFirst();
+        // 取消只改变终态，已持久化的失联原因仍证明旧 claim 被隔离；普通坏 token 不具备此事实。
+        if (execution?.error_code === 'CLOUD_WORKER_DISCONNECTED' && execution.lease_expires_at === null &&
+          (job.status !== 'cancelled' || execution.status === 'cancelled')) return fenced(job.status as 'blocked' | 'cancelled');
       }
       if (!sameToken(claimToken, job.claim_token_hash)) throw new DomainError('PERMISSION_DENIED', 'invalid claim token');
       if (isCloud && daemonStatus(daemon) !== 'ready') {

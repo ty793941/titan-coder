@@ -64,6 +64,45 @@ async function artifactFixture() {
 }
 
 describe('bounded cloud control plane', () => {
+  it.each(['cloud', 'run'])('retains the durable fence proof after expiry and %s cancellation without accepting stale progress', async cancelVia => {
+    const f = await ready();
+    const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
+    const progress = { claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'completed', payload: {} };
+    await api.db.updateTable('execution_job').set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', f.dispatch.runId).execute();
+    await api.post(`/api/daemons/${f.target.daemonId}/claim`).set('Authorization', auth(f.target.authToken)).send({}).expect(204);
+    expect((await api.get(`/api/runs/${f.dispatch.runId}`).expect(200)).body.status).toBe('reconnecting');
+    const cancelPath = cancelVia === 'cloud' ? `/api/cloud-executions/${f.dispatch.cloud.executionId}/cancel` : `/api/runs/${f.dispatch.runId}/cancel`;
+    await api.post(cancelPath).set('Authorization', auth(consoleToken)).send({}).expect(200);
+    const expected = { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: f.target.daemonId, runId: f.dispatch.runId, eventId: progress.eventId, jobStatus: 'cancelled', runStatus: 'cancelled' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const rejected = await api.post(path).set('Authorization', auth(f.target.authToken)).send(progress).expect(403);
+      expect(rejected.body).toMatchObject({ code: 'PERMISSION_DENIED', details: expected });
+    }
+    const job = await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
+    expect(job).toMatchObject({ status: 'cancelled', cancel_requested: true, claim_token_hash: null, lease_expires_at: null });
+    expect(Number(job.last_sequence)).toBe(0);
+    expect((await api.get(`/api/runs/${f.dispatch.runId}`).expect(200)).body.status).toBe('cancelled');
+    expect((await api.db.selectFrom('cloud_execution').selectAll().where('id', '=', f.dispatch.cloud.executionId).executeTakeFirstOrThrow()).error_code).toBe('CLOUD_WORKER_DISCONNECTED');
+    expect(await api.db.selectFrom('execution_progress').select('event_id').where('event_id', '=', progress.eventId).execute()).toEqual([]);
+    expect(await api.db.selectFrom('event').select('event_id').where('run_id', '=', f.dispatch.runId).where('event_type', '=', 'cloud_execution.reconnecting').execute()).toHaveLength(1);
+    const other = await api.post(`/api/daemons/${f.source.daemonId}/runs/${f.dispatch.runId}/progress`).set('Authorization', auth(f.source.authToken)).send(progress).expect(404);
+    expect(other.body.details.reason).toBeUndefined();
+    const nextEvent = await api.post(path).set('Authorization', auth(f.target.authToken)).send({ ...progress, eventId: 'other-event' }).expect(403);
+    expect(nextEvent.body.details.eventId).toBe('other-event');
+  });
+
+  it('does not grant a discard proof for an unfenced cancellation or an unrelated cloud execution', async () => {
+    const f = await ready();
+    await api.post(`/api/cloud-executions/${f.dispatch.cloud.executionId}/cancel`).set('Authorization', auth(consoleToken)).send({}).expect(200);
+    const body = { claimToken: 'wrong-token', eventId: randomUUID(), sequence: 1, type: 'completed', payload: {} };
+    const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
+    expect((await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403)).body.details).toEqual({});
+    await api.db.updateTable('execution_job').set({ claim_token_hash: null, lease_expires_at: null }).where('run_id', '=', f.dispatch.runId).execute();
+    expect((await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403)).body.details).toEqual({});
+    await api.db.updateTable('cloud_execution').set({ error_code: 'CLOUD_WORKER_DISCONNECTED', daemon_id: f.source.daemonId }).where('id', '=', f.dispatch.cloud.executionId).execute();
+    expect((await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403)).body.details).toEqual({});
+  });
+
   it.each([
     { elapsed: 40000, type: 'running' },
     { elapsed: 100000, type: 'completed' },

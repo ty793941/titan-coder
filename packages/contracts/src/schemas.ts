@@ -133,8 +133,8 @@ export const cloudProgressFenceSchema = z.object({
   eventId: identifier,
   jobStatus: z.enum(['blocked', 'cancelled']),
   runStatus: z.enum(['reconnecting', 'cancelled']),
-}).strict().refine(value => (value.jobStatus === 'cancelled') === (value.runStatus === 'cancelled'), {
-  message: 'cloud fence job and run states must match',
+}).strict().refine(value => value.jobStatus === 'blocked' && value.runStatus === 'reconnecting' || value.jobStatus === 'cancelled' && value.runStatus === 'cancelled', {
+  message: 'cloud fence must describe blocked/reconnecting or cancelled/cancelled',
 });
 export type CloudProgressFence = z.infer<typeof cloudProgressFenceSchema>;
 

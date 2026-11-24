@@ -258,4 +258,17 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/failure'].post.requestBody.content['application/json'].schema).toEqual(ref('HandoffFailureRequest'));
     expect(api.paths['/api/daemons/{id}/runs/{runId}/cloud'].post.requestBody.content['application/json'].schema).toEqual(ref('CloudLifecycleRequest'));
   });
+
+  it('publishes only paired cloud fence states and binds the proof to progress error details', () => {
+    const api = load();
+    const proof = api.components.schemas.CloudProgressFence;
+    expect(proof).toBeDefined();
+    expect(proof.additionalProperties).toBe(false);
+    expect(proof.required).toEqual(['reason', 'environmentType', 'daemonId', 'runId', 'eventId', 'jobStatus', 'runStatus']);
+    expect(proof.oneOf).toEqual([
+      { properties: { jobStatus: { const: 'blocked' }, runStatus: { const: 'reconnecting' } } },
+      { properties: { jobStatus: { const: 'cancelled' }, runStatus: { const: 'cancelled' } } },
+    ]);
+    expect(api.paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post['x-fence-details-schema']).toEqual(ref('CloudProgressFence'));
+  });
 });
