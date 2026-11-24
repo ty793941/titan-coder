@@ -73,6 +73,7 @@ Content-Type: application/json
 
 - Cloud Daemon 心跳失联时，旧 Progress 会被拒绝，Job 进入 blocked，Session/Run 进入 `reconnecting`，不会续租或自动重跑。
 - Cloud Executor 重启时，只能重新连接拥有者一致且仍存在的容器；不会重新消费 Secret Lease 或重复启动模型。
+- Daemon 正常退出只断开 Docker CLI，不向 Session 容器转发终止信号；取消和超时使用显式 Docker stop，确认退出后再收尾。
 - 容器缺失、Snapshot 校验失败、Lease 过期和容器超时会产生稳定错误码，并保留源 Session 和 Handoff 事实。
 - Handoff 使用幂等键；重复请求返回同一 Handoff 和目标 Session。源 Session 出现更新的 Run 后，旧 Run 的 Snapshot ACK 会被拒绝。
 - 管理取消会记录取消状态并撤销租约，Cloud Executor 在轮询到取消后停止容器、确认退出并收尾。已 fencing 的旧 Progress 只能凭匹配的控制面证明写入私有 discard 审计，不能更新业务事实或阻塞 Daemon 队列。
@@ -92,23 +93,23 @@ pnpm --filter @titan/agent-runtime test
 pnpm --filter @titan/daemon test
 TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_CODEX_IMAGE_TESTS=1 \
   TITAN_RUNTIME_TEST_IMAGE=titan-session:phase2a \
-  pnpm exec vitest run apps/daemon/test/cloud/runtime-image.integration.test.ts
-TITAN_CLOUD_E2E=1 pnpm --filter @titan/control-plane test -- cloud-daemon.e2e.test.ts
+  pnpm --filter @titan/daemon exec vitest run test/cloud/runtime-image.integration.test.ts --maxWorkers=1
+TITAN_CLOUD_E2E=1 pnpm --filter @titan/control-plane exec vitest run test/cloud-daemon.e2e.test.ts --maxWorkers=1
 ```
 
 真实 Docker E2E 使用本地 fixture Runtime，不调用付费模型；它验证源 Daemon、Cloud Executor、容器、Snapshot、Checkpoint、Artifact、Secret 边界和清理时序。Runtime 镜像 smoke 会在非 root、只读根和断网条件下验证 pnpm 固定版本并实际执行无依赖 fixture 的 `pnpm test`。完整 Linux Codex 镜像 smoke 会额外验证固定 Codex 版本，但不会调用 Provider。
 
-全仓真实验收时，Turbo 需要显式传递测试开关；按包串行、每包最多两个 Worker 可避免多个数据库初始化并行争用：
+全仓真实验收时，Turbo 需要显式传递测试开关；按包串行、每包一个 Worker 可避免多个数据库初始化并行争用。使用包内执行命令可避免扫描本地隔离工作树：
 
 ```bash
 TITAN_CLOUD_E2E=1 TITAN_REAL_DOCKER_TESTS=1 \
 TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_CODEX_IMAGE_TESTS=1 \
 TITAN_RUNTIME_TEST_IMAGE=titan-session:phase2a \
 TITAN_CODEX_BINARY=/absolute/path/to/codex \
-pnpm exec turbo run test --force --concurrency=1 --env-mode=loose -- --maxWorkers=2 --testTimeout=15000
+pnpm exec turbo run test --force --concurrency=1 --env-mode=loose -- --maxWorkers=1 --testTimeout=30000
 ```
 
-2026-11-24 在 Node 22.23.5 下执行该门禁：493 项通过，0 项跳过；构建、类型检查、Lint 和 OpenAPI 一致性检查通过。最终只读评审结论为 `approve`。真实 Provider 的付费推理未执行。
+2026-11-24 最终在宿主 Node 24.22.3、Session 镜像 Node 22.23.5 下执行该门禁：511 项通过，0 项失败，0 项跳过；构建、类型检查、Lint 和 OpenAPI 一致性检查通过。最终只读评审结论为 `approve`。真实 Provider 的付费推理未执行。
 
 ## 当前边界
 

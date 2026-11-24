@@ -27,8 +27,11 @@ function excluded(path: string): boolean {
   const filename = parts.at(-1) ?? '';
   const extension = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1).toLowerCase() : '';
   const isSourceFile = sourceExtensions.has(extension);
+  const credentialData = /(?:^|[-_.])(?:auth|keys?|tokens?|secrets?|passwords?|credentials?|api[-_]?keys?|private[-_]?keys?|service[-_]?accounts?)(?:[-_.]|$)/i.test(filename)
+    && /\.(?:json5?|xml|ya?ml|toml|ini|conf|config|txt|csv|properties)$/i.test(filename);
   return containsSensitivePath(path) || parts.some(part => excludedNames.has(part) || part.startsWith('.env')
     || /(?:^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$)|\.(?:pem|key|p12|pfx|keystore)$)/i.test(part))
+    || credentialData
     || (!isSourceFile && /(?:^|[-_.])(?:auth|keys?|tokens?|secrets?|passwords?|credentials?|api[-_]?keys?|private[-_]?keys?|service[-_]?accounts?)(?:[-_.]|$)/i.test(filename));
 }
 

@@ -73,6 +73,28 @@ describe('LocalSnapshotStore', () => {
     expect(execFileSync(join(destination, 'run-token.sh'), { encoding: 'utf8' })).toBe('executable-ok');
   });
 
+  it.each([
+    ['credentials.xml', '<credentials><password>synthetic-passphrase</password></credentials>'],
+    ['secrets.json5', '{"password":"synthetic-passphrase"}'],
+    ['credentials.yaml', 'password: synthetic-passphrase'],
+  ])('always excludes explicit credential data %s while retaining auth source', async (filename, content) => {
+    const { root, source, snapshots, store } = await fixture();
+    await writeFile(join(source, filename), content);
+    await writeFile(join(source, 'auth.ts'), 'export const authenticationEnabled = true;');
+    const manifest = await store.exportWorkspace(source);
+    const packagePath = join(snapshots, `${manifest.snapshotId}.json`);
+    const pack = JSON.parse(await readFile(packagePath, 'utf8'));
+    expect(pack.files.map((file: { path: string }) => file.path)).toEqual(['auth.ts']);
+    const destination = join(root, 'safe-target');
+    await store.materialize(manifest, destination);
+    expect(await readdir(destination)).toEqual(['auth.ts']);
+    pack.files.push({ path: filename, content: Buffer.from(content).toString('base64'), mode: 0 });
+    const bytes = Buffer.from(JSON.stringify(pack));
+    await writeFile(packagePath, bytes);
+    const forged = { ...manifest, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}`, fileCount: 2, totalBytes: manifest.totalBytes + Buffer.byteLength(content) };
+    await expect(store.materialize(forged, join(root, 'unsafe-target'))).rejects.toThrow('CLOUD_SNAPSHOT_INVALID');
+  });
+
   it('rejects group, world, setuid, and arbitrary executable mode values', async () => {
     const { root, source, snapshots, store } = await fixture();
     await writeFile(join(source, 'script.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
