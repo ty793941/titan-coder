@@ -1,0 +1,13 @@
+**
+!package.json
+!dist/
+!dist/**
+!node_modules/
+!node_modules/**
+**/.env*
+**/credentials.json
+**/auth.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx

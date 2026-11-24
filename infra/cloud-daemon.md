@@ -45,10 +45,25 @@ TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_RUNTIME_TEST_IMAGE=titan-session:worker-smoke 
 
 worker stage 运行真实 container-worker，保留相同的生产依赖、入口和权限设置，但不含 Codex，不能替代 `titan-session:phase2a` 的最终验收或用于实际 Codex Session。
 
+容器内 npm 下载或源码构建受阻时，也可先在宿主完成 runtime build，再导出纯 JavaScript 生产依赖，用单独的离线配方验收真实 Linux worker。以下构建的 context 是新建的 deploy 目录；路径需选择尚不存在的位置，避免覆盖其他产物：
+
+```bash
+pnpm --filter @titan/agent-runtime... build
+pnpm --filter @titan/agent-runtime deploy --legacy --prod --offline /absolute/new/runtime-deploy
+docker build --pull=false --network=none -f apps/agent-runtime/Dockerfile.offline -t titan-session:worker-smoke /absolute/new/runtime-deploy
+TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_RUNTIME_TEST_IMAGE=titan-session:worker-smoke pnpm exec vitest run apps/daemon/test/cloud/runtime-image.integration.test.ts
+```
+
+如果本机缺少 registry 元数据，deploy 的严格 offline 模式可能失败。可在宿主临时使用 `npm_config_fetch_timeout=8000 npm_config_fetch_retries=0`，将 deploy 参数改为 `--prefer-offline --registry=https://registry.npmjs.org`，有界补齐元数据。此配方只适用于当前 runtime 的纯 JavaScript 生产依赖；不把宿主 native addons 或 macOS Codex 复制到 Linux 镜像。
+
 快照仅接受具备完整 40/64 位 Git HEAD 的工作区；缺少 revision 返回 `CLOUD_SNAPSHOT_REVISION`。checksum 格式为 `sha256:<64位hex>`，与 CP 契约一致。写入失败的私有 staging 保留待显式回收；无法核验 Docker owner 时保留资源，恢复后以确定名称和 labels 查询。
 
 ## 本次验证状态
 
 2026-11-24：源码已在 Node.js 22.23.5 下通过类型构建；契约、快照竞争和打包配置的 25 项定向测试通过。完整镜像两次构建分别达到 4 分钟、5 分钟总时限，官方 Linux Codex npm 安装未完成。宿主临时代理 `127.0.0.1:7890` 可连接，但官方包范围下载仅约 106 KB/s，没有将代理写入镜像。
 
-worker stage 的第三次有界构建完成了 npm 依赖下载，但在 agent-core 的 TypeScript 构建中报 `Cannot find module '@titan/contracts'`。当前尚未生成最终镜像或 worker-smoke 镜像，真实 Linux container-worker 与 Linux Codex 验收均未通过；对应测试保留为显式启用的集成门禁，不能把宿主测试或其他测试镜像的通过结果作为替代。
+worker stage 的第三次有界构建完成了 npm 依赖下载，但在 agent-core 的 TypeScript 构建中报 `Cannot find module '@titan/contracts'`；根 context 的源码构建配方仍未通过。后续使用宿主 pnpm deploy 的生产依赖，通过 `Dockerfile.offline` 成功生成独立镜像 `titan-session:worker-smoke`，镜像 ID 为 `sha256:a34c0d5744a5710eba39f6b94550eff80b39f8b5a876c88c290c181a4236e59f`。
+
+该离线镜像在真实 Linux 容器中通过 Qwen 缺凭证 dispatch：stdout 顺序为 running、waiting_input、result waiting_input，退出码 0。相同测试还通过重建 adapter 的 find/inspect/logs 恢复、只读根目录、非 root 宿主 UID:GID、cap-drop/no-new-privileges、默认断网及 tmpfs 可写检查。真实镜像集成测试为 1 项通过、1 项跳过；跳过的是 Linux Codex CLI 版本检查，因为该离线镜像不含 Codex。完整 `titan-session:phase2a` 镜像和 Linux Codex 验收仍未完成，不能以 worker-smoke 替代。
+
+CloudExecutor 传递给 `LocalSnapshotStore.materialize()` 的 manifest 必须保留 `sha256:` 前缀；adapter 的 manifest 校验及 exact-bytes checksum 比较均要求该格式，不接受先 strip 前缀后的值。Daemon package 的 `@titan/agent-core` workspace 依赖需与主代理新增的 `@titan/agent-runtime` 依赖同时保留。
