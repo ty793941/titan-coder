@@ -76,6 +76,7 @@ const schemas = Object.fromEntries(Object.entries({
   CloudSnapshotManifest: source.cloudSnapshotManifestSchema,
   HandoffCreateRequest: source.handoffCreateRequestSchema.partial({ idempotencyKey: true }),
   HandoffSnapshotRequest: source.handoffSnapshotRequestSchema,
+  HandoffFailureRequest: source.handoffFailureRequestSchema,
   CloudLifecycleRequest: source.cloudLifecycleRequestSchema,
   ExecutionCheckpoint: source.executionCheckpointSchema,
   RunProgress: source.runProgressSchema,
@@ -148,6 +149,7 @@ Object.assign(schemas, {
 schemas.DaemonView.additionalProperties = true;
 schemas.ArtifactCreateRequest.properties.sourceArtifacts.uniqueItems = true;
 schemas.ArtifactCreateRequest.description = 'sourceArtifacts 必须唯一且全部属于同一 Task，sessionId 必须属于该 Task。content 上限为字符数；服务端 HTTP body 上限独立生效。';
+schemas.ArtifactCreateRequest.description += ' 禁止普通创建接口关联cloud Session，云端工件只通过认证Daemon progress登记。';
 schemas.StageRequest.description = '仅允许相邻 QRSPI 阶段推进；要求 active Task、expectedVersion 匹配，以及每个准备阶段最新版本 Artifact 的批准与来源链。';
 schemas.DaemonHeartbeatRequest.description = '正文可省略；daemonId 若提供须等于路径 daemonId。sequence 与 occurredAt 当前仅校验，不用于心跳去重，服务端采用收到时间。';
 schemas.DaemonEventRequest.description = 'daemonId 可省略，提供时须匹配路径；(daemonId,eventId) 重复返回 created=false，当前不比较重复事件正文，也不要求 sequence 连续。';
@@ -255,6 +257,7 @@ operation('post', '/api/sessions/{id}/handoff', 'requestHandoff', '请求本机�
 operation('get', '/api/handoffs/{id}', 'getHandoff', '查询交接事实', { auth: 'console', responses: { '200': response('交接与清单元数据。', ref('Handoff')) } });
 operation('get', '/api/daemons/{id}/handoffs/pending', 'pendingHandoffs', '领取源 Daemon 待导出交接', { auth: true, description: '仅返回当前认证源 Daemon 的 requested，最多100条；workspacePath 来自已授权源 Session，baseRevision 可省略。', responses: { '200': response('待导出的请求。', ref('PendingHandoffs')) } });
 operation('post', '/api/daemons/{id}/handoffs/{handoffId}/snapshot', 'acknowledgeHandoffSnapshot', '确认停止并登记 Snapshot 清单', { auth: true, body: 'HandoffSnapshotRequest', description: 'stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。', responses: { '200': response('starting Handoff 或相同清单重放。', ref('Handoff')) } });
+operation('post', '/api/daemons/{id}/handoffs/{handoffId}/failure', 'failRequestedHandoff', '源Daemon上报交接准备失败', { auth: true, body: 'HandoffFailureRequest', description: '只允许认证的源Daemon关闭尚未创建目标的requested Handoff。errorCode仅允许HANDOFF_SNAPSHOT_FAILED、HANDOFF_TRANSFER_FAILED、HANDOFF_TARGET_UNAVAILABLE，不接受错误文本或路径。原子写failed、completedAt、version和handoff.failed Outbox事件；相同失败重放200且不重复事件，改错误码409，已创建目标400；保留源Session/Run状态。', responses: { '200': response('failed Handoff或相同失败重放。', ref('Handoff')) } });
 operation('post', '/api/daemons/{id}/runs/{runId}/cloud', 'reportCloudLifecycle', '上报独立容器生命周期与消费租约', { auth: true, body: 'CloudLifecycleRequest', description: '校验 Daemon Bearer、job归属、claimToken、双执行租约及状态转移。consumeSecret:true 以CAS单次消费Secret Lease，重复409，不返回Secret。生命周期不修改Run状态，不占用RunProgress.sequence。容器ID首次登记后不可改变。', responses: { '200': response('生命周期及消费确认。', ref('CloudLifecycleAck')) } });
 operation('get', '/api/cloud-executions/{id}', 'getCloudExecution', '查询云端执行并核对失联事实', { auth: 'console', description: '观察到失联或租约过期时将claimed作业隔离为blocked、Session/Run标记reconnecting、撤销凭证租约，保留容器最后已知状态；不会自动重执行。', responses: { '200': response('不含凭证或claimToken的执行事实。', ref('CloudExecution')) } });
 operation('post', '/api/cloud-executions/{id}/cancel', 'cancelCloudExecution', '幂等取消云端执行', { auth: 'console', body: 'CloudCancelRequest', bodyRequired: false, idempotency: false, description: 'Console Bearer；正文为空或仅idempotencyKey，请求头可提供Idempotency-Key。以终态天然幂等，在同一事务更新Run/Session/job/cloud/Handoff、撤销Secret Lease并写Outbox。响应不证明容器已经停止。', responses: { '200': response('当前云端执行事实。', ref('CloudExecution')) } });
@@ -267,6 +270,8 @@ for (const action of ['pause', 'resume', 'cancel']) {
 }
 paths['/api/daemons/{daemonId}/runs/{runId}/control'].get.description += ' cloud同时续期job和cloud_execution的120秒租约；任一过期或Daemon失联则隔离为blocked并持久标记reconnecting，停止信号为true。Secret Lease固定有效期不续期。';
 paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。';
+paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。';
+paths['/api/artifacts/{artifactId}/content'].get.description += ' cloud工件仅允许创建来源为所属Daemon、关联真实cloud_execution的记录；宿主根从该Daemon唯一workspaceRoot推导到sessionId/session，读取时校验realpath仍为该根下精确Session目录，拒绝Session目录及工件目录符号链接逃逸。宿主文件需由Executor在容器退出后保留，CP不调用Docker。';
 
 const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',

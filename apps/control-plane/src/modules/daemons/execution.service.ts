@@ -10,6 +10,7 @@ import { DatabaseService } from '../../database/database.service.js';
 import { EventsService } from '../events/events.service.js';
 import { canonicalJson, daemonStatus, latestApprovedPlan, sameToken, tokenHash, validateExecution } from './execution-policy.js';
 import { CloudExecutionsService } from '../cloud-executions/cloud-executions.service.js';
+import { cloudArtifactScope } from '../artifacts/cloud-artifact-scope.js';
 
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const leaseMs = 120000;
@@ -40,7 +41,7 @@ function normalizeCheckpoint(value: unknown): ExecutionCheckpoint {
   return safe;
 }
 
-function parseArtifactOutput(value: unknown, config: ExecutionConfig): ReturnType<typeof artifactWriteOutputSchema.parse> | undefined {
+function parseArtifactOutput(value: unknown, workspacePath: string): ReturnType<typeof artifactWriteOutputSchema.parse> | undefined {
   if (!value || typeof value !== 'object' || (value as { kind?: unknown }).kind !== 'artifact') return undefined;
   if (!('uri' in value) || !('checksum' in value)) return undefined;
   const output = artifactWriteOutputSchema.parse(value);
@@ -59,12 +60,12 @@ function parseArtifactOutput(value: unknown, config: ExecutionConfig): ReturnTyp
   let artifactPath: string;
   try {
     const uri = new URL(output.uri);
-    if (uri.protocol !== 'file:' || uri.hostname) throw new Error('artifact URI must be a local file URI');
+    if (uri.protocol !== 'file:' || uri.hostname || uri.search || uri.hash) throw new Error('artifact URI must be a local file URI');
     artifactPath = fileURLToPath(uri);
   } catch {
     throw new DomainError('PERMISSION_DENIED', 'artifact URI must be a local file URI');
   }
-  const artifactRoot = resolve(config.workspacePath, '.titan', 'artifacts');
+  const artifactRoot = resolve(workspacePath, '.titan', 'artifacts');
   const pathRelativeToRoot = relative(artifactRoot, resolve(artifactPath));
   const expectedRelativePath = `${match[1]}/${logicalPath}`.replaceAll('/', process.platform === 'win32' ? '\\' : '/');
   if (!pathRelativeToRoot || pathRelativeToRoot === '..' || pathRelativeToRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || resolve(pathRelativeToRoot) !== resolve(expectedRelativePath)) {
@@ -187,8 +188,9 @@ export class ExecutionService {
         } else {
           await trx.insertInto('checkpoint').values({ id: checkpoint.id, run_id: runId, sequence: input.sequence, snapshot: JSON.stringify(checkpoint) }).execute();
         }
-        await this.registerCheckpointArtifacts(trx, job, run, context, checkpoint);
       }
+      const output = this.progressOutput(input.payload);
+      await this.registerProgressArtifacts(trx, job, run, context, checkpoint, output?.output ?? input.payload.output);
       const status = ['output', 'checkpoint'].includes(input.type) ? run.status : input.type;
       await trx.updateTable('run').set({ status, version: run.version + 1,
         ...(checkpoint ? { checkpoint_id: checkpoint.id } : {}),
@@ -201,7 +203,6 @@ export class ExecutionService {
       await this.cloud.renew(trx, runId, new Date(Date.now() + leaseMs));
       await this.cloud.finish(trx, runId, status, input.type === 'failed' ? this.progressErrorCode(input.payload) : undefined);
       if (status === 'waiting_input') await this.cloud.finish(trx, runId, 'failed', 'CLOUD_RUNTIME_WAITING_INPUT');
-      const output = this.progressOutput(input.payload);
       if (output) await this.recordProgressAudit(trx, runId, daemonId, input.eventId, output);
       const safePayload = redactSecrets(input.payload) as Record<string, unknown>;
       await this.events.append(trx, { eventId: input.eventId, eventType: `run.${input.type}`, projectId: context.project_id, taskId: context.task_id,
@@ -249,15 +250,23 @@ export class ExecutionService {
     }
   }
 
-  private async registerCheckpointArtifacts(
+  private async registerProgressArtifacts(
     trx: Transaction<Database>,
     job: Pick<Database['execution_job'], 'plan_hash' | 'config' | 'daemon_id'>,
     run: Database['run'],
     context: { project_id: string; task_id: string },
-    checkpoint: ExecutionCheckpoint,
+    checkpoint: ExecutionCheckpoint | undefined,
+    toolOutput?: unknown,
   ): Promise<void> {
-    const outputs = checkpoint.successfulTools
-      .map(tool => parseArtifactOutput(tool.output, executionConfigSchema.parse(job.config) as ExecutionConfig))
+    const config = executionConfigSchema.parse(job.config);
+    const values = [...(checkpoint?.successfulTools.map(tool => tool.output) ?? []), ...(config.environmentType === 'cloud' && toolOutput ? [toolOutput] : [])];
+    if (!values.some(value => value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'artifact')) return;
+    const workspacePath = config.environmentType === 'cloud' ? (await cloudArtifactScope(trx, run.session_id, job.daemon_id)).workspacePath : config.workspacePath;
+    const outputs = values
+      .map(value => {
+        if (config.environmentType === 'cloud' && value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'artifact') artifactWriteOutputSchema.parse(value);
+        return parseArtifactOutput(value, workspacePath);
+      })
       .filter((output): output is ReturnType<typeof artifactWriteOutputSchema.parse> => output !== undefined);
     if (outputs.length === 0) return;
     const plan = await trx.selectFrom('artifact').select(['artifact_id'])

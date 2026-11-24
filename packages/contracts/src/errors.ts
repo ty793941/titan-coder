@@ -24,6 +24,8 @@ export const errorCodes = [
   'CLOUD_RUNTIME_WAITING_INPUT',
   'HANDOFF_CHECKPOINT_INVALID',
   'HANDOFF_TARGET_UNAVAILABLE',
+  'HANDOFF_SNAPSHOT_FAILED',
+  'HANDOFF_TRANSFER_FAILED',
 ] as const;
 
 export type ErrorCode = (typeof errorCodes)[number];

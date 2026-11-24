@@ -34,4 +34,11 @@ export class HandoffsController {
     await this.daemons.authenticate(id, authorization);
     return this.handoffs.snapshot(id, handoffId, body);
   }
+
+  @Post('/daemons/:id/handoffs/:handoffId/failure')
+  @HttpCode(200)
+  async failure(@Param('id') id: string, @Param('handoffId') handoffId: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
+    await this.daemons.authenticate(id, authorization);
+    return this.handoffs.failure(id, handoffId, body);
+  }
 }

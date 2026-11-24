@@ -75,6 +75,9 @@ export const handoffCreateRequestSchema = z.object({
   workspaceSync: z.object({ mode: z.enum(['git-snapshot', 'git-patch']) }).strict(), idempotencyKey,
 }).strict();
 export const handoffSnapshotRequestSchema = z.object({ manifest: cloudSnapshotManifestSchema, stopped: z.literal(true) }).strict();
+export const handoffFailureRequestSchema = z.object({
+  errorCode: z.enum(['HANDOFF_SNAPSHOT_FAILED', 'HANDOFF_TRANSFER_FAILED', 'HANDOFF_TARGET_UNAVAILABLE']),
+}).strict();
 export const cloudExecutionStatusSchema = z.enum(['queued', 'creating', 'starting', 'running', 'stopping', 'completed', 'failed', 'cancelled']);
 export const cloudLifecycleRequestSchema = z.object({
   claimToken: identifier, status: z.enum(['creating', 'starting', 'running', 'stopping', 'completed', 'failed', 'cancelled']),

@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T01:32:55.412Z"
+    "generatedAt": "2026-11-24T02:10:22.264Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -941,7 +941,7 @@
       "get": {
         "operationId": "getArtifactContent",
         "summary": "读取已登记 Artifact 正文",
-        "description": "需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token。先读取既有 Artifact 元数据并校验 Project/Task/Session 归属；仅允许控制面仓库 .titan/artifacts 或该 Session execution.workspacePath/.titan/artifacts 内的本地 file URI。控制面文件必须匹配 artifactId-v{version}.md，运行时文件必须匹配 artifact://UUID/logicalPath 引用；禁止借用同目录其他工件文件。realpath 校验文件及工件根目录，打开后再次复核路径与 inode，拒绝符号链接逃逸及目录替换。只读 UTF-8 的 .md/.markdown、.json、.txt/.text/.log；不执行或渲染 HTML。读取上限为 2097152 字节，按原始字节验证 SHA-256。超限返回 400 VALIDATION_FAILED/details.reason=ARTIFACT_CONTENT_TOO_LARGE，details.maxBytes=2097152；校验和不符返回 409 VERSION_CONFLICT/details.reason=ARTIFACT_CHECKSUM_MISMATCH；格式或编码不支持返回 400，越界返回 403，元数据或文件缺失返回 404。",
+        "description": "需要 TITAN_CONSOLE_TOKEN 对应的 Bearer Token。先读取既有 Artifact 元数据并校验 Project/Task/Session 归属；仅允许控制面仓库 .titan/artifacts 或该 Session execution.workspacePath/.titan/artifacts 内的本地 file URI。控制面文件必须匹配 artifactId-v{version}.md，运行时文件必须匹配 artifact://UUID/logicalPath 引用；禁止借用同目录其他工件文件。realpath 校验文件及工件根目录，打开后再次复核路径与 inode，拒绝符号链接逃逸及目录替换。只读 UTF-8 的 .md/.markdown、.json、.txt/.text/.log；不执行或渲染 HTML。读取上限为 2097152 字节，按原始字节验证 SHA-256。超限返回 400 VALIDATION_FAILED/details.reason=ARTIFACT_CONTENT_TOO_LARGE，details.maxBytes=2097152；校验和不符返回 409 VERSION_CONFLICT/details.reason=ARTIFACT_CHECKSUM_MISMATCH；格式或编码不支持返回 400，越界返回 403，元数据或文件缺失返回 404。 cloud工件仅允许创建来源为所属Daemon、关联真实cloud_execution的记录；宿主根从该Daemon唯一workspaceRoot推导到sessionId/session，读取时校验realpath仍为该根下精确Session目录，拒绝Session目录及工件目录符号链接逃逸。宿主文件需由Executor在容器退出后保留，CP不调用Docker。",
         "security": [
           {
             "ConsoleBearer": []
@@ -1612,7 +1612,7 @@
       "post": {
         "operationId": "reportRunProgress",
         "summary": "上报 Run 进度与检查点",
-        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。",
+        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。 cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。",
         "security": [
           {
             "DaemonBearer": []
@@ -2051,6 +2051,81 @@
         "responses": {
           "200": {
             "description": "starting Handoff 或相同清单重放。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{id}/handoffs/{handoffId}/failure": {
+      "post": {
+        "operationId": "failRequestedHandoff",
+        "summary": "源Daemon上报交接准备失败",
+        "description": "只允许认证的源Daemon关闭尚未创建目标的requested Handoff。errorCode仅允许HANDOFF_SNAPSHOT_FAILED、HANDOFF_TRANSFER_FAILED、HANDOFF_TARGET_UNAVAILABLE，不接受错误文本或路径。原子写failed、completedAt、version和handoff.failed Outbox事件；相同失败重放200且不重复事件，改错误码409，已创建目标400；保留源Session/Run状态。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "handoffId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffFailureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "failed Handoff或相同失败重放。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2758,6 +2833,23 @@
         "required": [
           "manifest",
           "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "HandoffFailureRequest": {
+        "type": "object",
+        "properties": {
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
+              "HANDOFF_TARGET_UNAVAILABLE"
+            ]
+          }
+        },
+        "required": [
+          "errorCode"
         ],
         "additionalProperties": false
       },
@@ -3694,7 +3786,7 @@
           "content"
         ],
         "additionalProperties": false,
-        "description": "sourceArtifacts 必须唯一且全部属于同一 Task，sessionId 必须属于该 Task。content 上限为字符数；服务端 HTTP body 上限独立生效。"
+        "description": "sourceArtifacts 必须唯一且全部属于同一 Task，sessionId 必须属于该 Task。content 上限为字符数；服务端 HTTP body 上限独立生效。 禁止普通创建接口关联cloud Session，云端工件只通过认证Daemon progress登记。"
       },
       "StageRequest": {
         "type": "object",
@@ -4081,6 +4173,8 @@
               "CLOUD_RUNTIME_WAITING_INPUT",
               "HANDOFF_CHECKPOINT_INVALID",
               "HANDOFF_TARGET_UNAVAILABLE",
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
               "INTERNAL_ERROR"
             ]
           },

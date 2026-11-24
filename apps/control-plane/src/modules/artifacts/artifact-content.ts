@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DomainError } from '@titan/contracts';
 
 export const controlPlaneArtifactRoot = (): string => resolve(process.cwd(), process.cwd().endsWith('/control-plane') ? '../../.titan/artifacts' : '.titan/artifacts');
-export type ArtifactContentRoot = { workspacePath: string; artifactRoot: string; expectedPath?: string };
+export type ArtifactContentRoot = { workspacePath: string; artifactRoot: string; expectedPath?: string; authorizationRoot?: string };
 const maxBytes = 2 * 1024 * 1024;
 const within = (root: string, path: string): boolean => {
   const child = relative(root, path);
@@ -27,6 +27,10 @@ export async function readArtifactContent(uri: string, checksum: string, roots: 
   if (!scope) throw new DomainError('PERMISSION_DENIED', 'artifact URI is outside allowed artifact directories');
   try {
     const workspace = await realpath(scope.workspacePath);
+    const authorizationRoot = scope.authorizationRoot ? await realpath(scope.authorizationRoot) : undefined;
+    if (authorizationRoot && workspace !== resolve(authorizationRoot, relative(scope.authorizationRoot!, scope.workspacePath))) {
+      throw new DomainError('PERMISSION_DENIED', 'cloud workspace escapes its registered session directory');
+    }
     const root = await realpath(scope.artifactRoot);
     if (root !== resolve(workspace, '.titan', 'artifacts')) throw new DomainError('PERMISSION_DENIED', 'artifact directory escapes its workspace');
     const canonicalPath = await realpath(path);
@@ -46,8 +50,9 @@ export async function readArtifactContent(uri: string, checksum: string, roots: 
       const currentPath = await realpath(path);
       const currentRoot = await realpath(scope.artifactRoot);
       const currentWorkspace = await realpath(scope.workspacePath);
+      const currentAuthorizationRoot = scope.authorizationRoot ? await realpath(scope.authorizationRoot) : undefined;
       const currentStat = await pathStat(currentPath);
-      if (currentWorkspace !== workspace || currentRoot !== root || currentPath !== canonicalPath
+      if (currentAuthorizationRoot !== authorizationRoot || currentWorkspace !== workspace || currentRoot !== root || currentPath !== canonicalPath
         || !within(currentRoot, currentPath) || currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
         throw new DomainError('PERMISSION_DENIED', 'artifact path changed while opening content');
       }

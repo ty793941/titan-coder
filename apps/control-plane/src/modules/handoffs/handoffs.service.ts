@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { DomainError, executionCheckpointSchema, handoffCreateRequestSchema, handoffSnapshotRequestSchema, validateExecutionConfig } from '@titan/contracts';
+import { DomainError, executionCheckpointSchema, handoffCreateRequestSchema, handoffFailureRequestSchema, handoffSnapshotRequestSchema, validateExecutionConfig } from '@titan/contracts';
 import type { Selectable, Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
 import type { Database, SessionHandoffTable } from '../../database/types.js';
@@ -92,6 +92,24 @@ export class HandoffsService {
       await this.events.append(trx, { ...context, eventType: 'session.created', payload: { id: targetId, parentSessionId: session.id, environmentType: 'cloud' } });
       await this.events.append(trx, { ...context, eventType: 'run.created', runId, payload: { id: runId, attempt: 1, checkpointId } });
       await this.events.append(trx, { ...context, eventType: 'handoff.created', runId, payload: { handoffId: handoff.id, executionId, sourceSessionId: session.id, targetSessionId: targetId, sourceCheckpointId: saved.id, checkpointId, snapshotId: manifest.snapshotId, stopped: true } });
+      return view(updated);
+    });
+  }
+
+  async failure(daemonId: string, id: string, source: unknown) {
+    const input = handoffFailureRequestSchema.parse(source);
+    return this.database.db.transaction().execute(async trx => {
+      const handoff = await trx.selectFrom('session_handoff').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
+      if (!handoff) throw new DomainError('RESOURCE_NOT_FOUND', 'handoff was not found');
+      if (handoff.source_daemon_id !== daemonId) throw new DomainError('PERMISSION_DENIED', 'handoff failure must be reported by its source daemon');
+      if (handoff.status === 'failed' && !handoff.target_session_id) {
+        if (handoff.error_code !== input.errorCode) throw new DomainError('VERSION_CONFLICT', 'handoff failure is immutable');
+        return view(handoff);
+      }
+      if (handoff.status !== 'requested' || handoff.target_session_id) throw new DomainError('INVALID_STATE_TRANSITION', 'source failure can only close a requested handoff without a target');
+      const updated = await trx.updateTable('session_handoff').set({ status: 'failed', error_code: input.errorCode, completed_at: new Date(), version: handoff.version + 1 }).where('id', '=', handoff.id).where('version', '=', handoff.version).returningAll().executeTakeFirstOrThrow();
+      const task = await trx.selectFrom('task').select('project_id').where('id', '=', handoff.task_id).executeTakeFirstOrThrow();
+      await this.events.append(trx, { eventType: 'handoff.failed', projectId: task.project_id, taskId: handoff.task_id, sessionId: handoff.source_session_id, runId: handoff.source_run_id, actor: { type: 'daemon', id: daemonId }, payload: { handoffId: id, errorCode: input.errorCode } });
       return view(updated);
     });
   }

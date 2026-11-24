@@ -1,4 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp } from '../src/test-app.js';
 
@@ -8,14 +12,15 @@ const oldToken = process.env.TITAN_CONSOLE_TOKEN;
 const manifest = () => ({ schemaVersion: 1, snapshotId: `snapshot_${randomUUID()}`, baseRevision: 'a'.repeat(40), checksum: `sha256:${'b'.repeat(64)}`, fileCount: 2, totalBytes: 100 });
 const auth = (token: string) => `Bearer ${token}`;
 const cloudCapabilities = ['codex', 'cloud-session', 'container', 'snapshot-transfer', 'secret-lease'];
+const temporaryRoots: string[] = [];
 
 beforeAll(async () => { process.env.TITAN_CONSOLE_TOKEN = consoleToken; api = await createTestApp(); }, 20000);
-afterAll(async () => { await api?.close(); if (oldToken === undefined) delete process.env.TITAN_CONSOLE_TOKEN; else process.env.TITAN_CONSOLE_TOKEN = oldToken; });
+afterAll(async () => { await api?.close(); for (const root of temporaryRoots) await rm(root, { recursive: true, force: true }); if (oldToken === undefined) delete process.env.TITAN_CONSOLE_TOKEN; else process.env.TITAN_CONSOLE_TOKEN = oldToken; });
 
-async function fixture(capabilities = cloudCapabilities) {
+async function fixture(capabilities = cloudCapabilities, workspaceRoots = ['/var/lib/titan/cloud']) {
   await api.db.updateTable('daemon').set({ status: 'revoked' }).where('environment_type', '=', 'cloud').execute();
   const source = (await api.post('/api/daemons/register').send({ machineName: 'source', environmentType: 'local', capabilities: ['codex'], workspaceRoots: ['/tmp/titan'], maxConcurrentSessions: 1, daemonVersion: '0.2.0' }).expect(201)).body;
-  const target = (await api.post('/api/daemons/register').send({ machineName: 'cloud', environmentType: 'cloud', capabilities, workspaceRoots: ['/var/lib/titan/cloud'], maxConcurrentSessions: 10, daemonVersion: '0.2.0' }).expect(201)).body;
+  const target = (await api.post('/api/daemons/register').send({ machineName: 'cloud', environmentType: 'cloud', capabilities, workspaceRoots, maxConcurrentSessions: 10, daemonVersion: '0.2.0' }).expect(201)).body;
   const task = (await api.post('/api/projects/project_dev/tasks').send({ title: 'handoff', goal: 'continue in cloud', acceptanceCriteria: ['done'], priority: 'high', idempotencyKey: randomUUID() }).expect(201)).body;
   const planHash = `sha256:${'c'.repeat(64)}`;
   await api.db.insertInto('artifact').values({ artifact_id: `artifact_${randomUUID()}`, project_id: 'project_dev', task_id: task.id, session_id: null, type: 'plan', version: 1, schema_version: 1, uri: `file:///tmp/${randomUUID()}`, checksum: planHash, status: 'approved', source_artifacts: '[]', created_by_type: 'user', created_by_id: 'test', created_at: new Date(), review_state: 'approved', reference: null, metadata: '{}' }).execute();
@@ -34,13 +39,28 @@ async function requested(f: Awaited<ReturnType<typeof fixture>>, key = randomUUI
   return { body, handoff: response.body };
 }
 
-async function ready() {
-  const f = await fixture();
+async function ready(workspaceRoots?: string[]) {
+  const f = await fixture(cloudCapabilities, workspaceRoots);
   const { handoff } = await requested(f);
   const snapshot = manifest();
   const started = (await api.post(`/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`).set('Authorization', auth(f.source.authToken)).send({ manifest: snapshot, stopped: true }).expect(200)).body;
   const dispatch = (await api.post(`/api/daemons/${f.target.daemonId}/claim`).set('Authorization', auth(f.target.authToken)).send({}).expect(200)).body;
   return { ...f, handoff: started, snapshot, dispatch };
+}
+
+async function artifactFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'titan-cloud-artifact-'));
+  temporaryRoots.push(root);
+  const f = await ready([root]);
+  const artifactUuid = randomUUID();
+  const content = 'cloud artifact evidence';
+  const path = join(root, f.dispatch.sessionId, 'session', '.titan', 'artifacts', artifactUuid, 'answer.md');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, content);
+  const output = { kind: 'artifact', reference: `artifact://${artifactUuid}/answer.md`, uri: pathToFileURL(path).href, checksum: `sha256:${createHash('sha256').update(content).digest('hex')}`, artifactType: 'source-diff', output: 'written' };
+  const progress = { eventId: randomUUID(), sequence: 1, claimToken: f.dispatch.claimToken, type: 'completed', payload: {}, checkpoint: { id: `checkpoint_${randomUUID()}`, messages: [], successfulTools: [{ id: 'cloud-artifact', name: 'artifact.write', inputHash: 'hash', output }], evidence: [] } };
+  const progressPath = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
+  return { ...f, root, artifactUuid, path, content, output, progress, progressPath };
 }
 
 describe('bounded cloud control plane', () => {
@@ -217,5 +237,85 @@ describe('bounded cloud control plane', () => {
     await api.post(`${path}/progress`).set('Authorization', auth(f.target.authToken)).send({ claimToken: f.dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'completed', payload: {} }).expect(403);
     expect((await api.get(`${path}/control`).set('Authorization', auth(f.target.authToken)).expect(200)).body).toMatchObject({ status: 'reconnecting', cancelRequested: true });
     expect((await api.get(`/api/sessions/${f.dispatch.sessionId}`).expect(200)).body.status).toBe('reconnecting');
+  });
+
+  it('archives mapped cloud artifacts and reads them after terminal progress using the registered host root', async () => {
+    const f = await artifactFixture();
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send(f.progress).expect(200);
+    const saved = await api.db.selectFrom('artifact').selectAll().where('reference', '=', f.output.reference).executeTakeFirstOrThrow();
+    expect(saved).toMatchObject({ session_id: f.dispatch.sessionId, uri: f.output.uri, created_by_type: 'daemon', created_by_id: f.target.daemonId });
+    const response = await api.get(`/api/artifacts/${saved.artifact_id}/content`).set('Authorization', auth(consoleToken)).expect(200);
+    expect(response.body).toMatchObject({ content: f.content, checksum: f.output.checksum, format: 'markdown' });
+    await writeFile(f.path, 'modified after registration');
+    await api.get(`/api/artifacts/${saved.artifact_id}/content`).set('Authorization', auth(consoleToken)).expect(409);
+  });
+
+  it('rejects host artifact paths outside the exact daemon root and session mapping', async () => {
+    const f = await artifactFixture();
+    for (const path of [join(f.root, 'other-session', 'session', '.titan', 'artifacts', f.artifactUuid, 'answer.md'), join(f.root, '.titan', 'artifacts', f.artifactUuid, 'answer.md'), `/workspace/session/.titan/artifacts/${f.artifactUuid}/answer.md`, `/tmp/unregistered/.titan/artifacts/${f.artifactUuid}/answer.md`]) {
+      const checkpoint = structuredClone(f.progress.checkpoint);
+      checkpoint.successfulTools[0]!.output.uri = pathToFileURL(path).href;
+      await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ ...f.progress, eventId: randomUUID(), checkpoint }).expect(403);
+    }
+    await api.db.updateTable('daemon').set({ workspace_roots: JSON.stringify([f.root, '/tmp/ambiguous-cloud-root']) }).where('id', '=', f.target.daemonId).execute();
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send(f.progress).expect(403);
+    expect(await api.db.selectFrom('artifact').select('artifact_id').where('session_id', '=', f.dispatch.sessionId).execute()).toHaveLength(0);
+  });
+
+  it('validates cloud artifact tool outputs even without a checkpoint', async () => {
+    const f = await artifactFixture();
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ eventId: randomUUID(), sequence: 1, claimToken: f.dispatch.claimToken, type: 'output', payload: { output: { ...f.output, uri: 'file:///tmp/private.md' } } }).expect(403);
+    const { checksum: _checksum, ...incomplete } = f.output;
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ eventId: randomUUID(), sequence: 1, claimToken: f.dispatch.claimToken, type: 'output', payload: { output: incomplete } }).expect(400);
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ eventId: randomUUID(), sequence: 1, claimToken: f.dispatch.claimToken, type: 'output', payload: { source: 'tool', status: 'completed', toolName: 'artifact.write', toolCallId: 'cloud-artifact', output: { ...f.output, uri: 'file:///tmp/private.md' } } }).expect(403);
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ eventId: randomUUID(), sequence: 1, claimToken: f.dispatch.claimToken, type: 'output', payload: { source: 'tool', status: 'completed', toolName: 'artifact.write', toolCallId: 'cloud-artifact', output: f.output } }).expect(200);
+    const saved = await api.db.selectFrom('artifact').selectAll().where('reference', '=', f.output.reference).executeTakeFirstOrThrow();
+    expect((await api.get(`/api/artifacts/${saved.artifact_id}/content`).set('Authorization', auth(consoleToken)).expect(200)).body.content).toBe(f.content);
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send({ ...f.progress, sequence: 2 }).expect(200);
+    expect(await api.db.selectFrom('artifact').select('artifact_id').where('reference', '=', f.output.reference).execute()).toHaveLength(1);
+  });
+
+  it('does not let ordinary artifact creation claim a cloud session or bypass daemon provenance', async () => {
+    const f = await artifactFixture();
+    await api.post(`/api/tasks/${f.task.id}/artifacts`).set('Idempotency-Key', randomUUID()).send({ type: 'source-diff', content: 'forged cloud output', sessionId: f.dispatch.sessionId }).expect(403);
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send(f.progress).expect(200);
+    const saved = await api.db.selectFrom('artifact').selectAll().where('reference', '=', f.output.reference).executeTakeFirstOrThrow();
+    await api.db.updateTable('artifact').set({ created_by_type: 'agent', created_by_id: 'project-manager' }).where('artifact_id', '=', saved.artifact_id).execute();
+    await api.get(`/api/artifacts/${saved.artifact_id}/content`).set('Authorization', auth(consoleToken)).expect(403);
+  });
+
+  it('rejects cloud workspace symlinks that escape or replace the authorized session directory', async () => {
+    const f = await artifactFixture();
+    await api.post(f.progressPath).set('Authorization', auth(f.target.authToken)).send(f.progress).expect(200);
+    const saved = await api.db.selectFrom('artifact').selectAll().where('reference', '=', f.output.reference).executeTakeFirstOrThrow();
+    const workspace = join(f.root, f.dispatch.sessionId, 'session');
+    const outside = await mkdtemp(join(tmpdir(), 'titan-cloud-outside-'));
+    temporaryRoots.push(outside);
+    const outsideArtifact = join(outside, '.titan', 'artifacts', f.artifactUuid);
+    await mkdir(outsideArtifact, { recursive: true });
+    await writeFile(join(outsideArtifact, 'answer.md'), f.content);
+    await rm(workspace, { recursive: true });
+    await symlink(outside, workspace, 'dir');
+    await api.get(`/api/artifacts/${saved.artifact_id}/content`).set('Authorization', auth(consoleToken)).expect(403);
+  });
+
+  it('accepts only the authenticated source daemon failure before a target is created and deduplicates the outbox event', async () => {
+    const f = await fixture();
+    const { handoff } = await requested(f);
+    const path = `/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/failure`;
+    const body = { errorCode: 'HANDOFF_SNAPSHOT_FAILED' };
+    await api.post(path).send(body).expect(401);
+    await api.post(`/api/daemons/${f.target.daemonId}/handoffs/${handoff.id}/failure`).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    await api.post(path).set('Authorization', auth(f.source.authToken)).send({ errorCode: 'ARBITRARY_FAILURE', message: 'private text' }).expect(400);
+    const [first, concurrent] = await Promise.all([1, 2].map(() => api.post(path).set('Authorization', auth(f.source.authToken)).send(body).expect(200)));
+    expect(concurrent!.body).toEqual(first!.body);
+    expect(first!.body).toMatchObject({ id: handoff.id, status: 'failed', errorCode: body.errorCode, targetSessionId: null });
+    expect((await api.post(path).set('Authorization', auth(f.source.authToken)).send(body).expect(200)).body).toEqual(first!.body);
+    await api.post(path).set('Authorization', auth(f.source.authToken)).send({ errorCode: 'HANDOFF_TRANSFER_FAILED' }).expect(409);
+    const events = await api.db.selectFrom('event').innerJoin('outbox_event', 'event.event_id', 'outbox_event.event_id').select('event.payload').where('event.event_type', '=', 'handoff.failed').where('event.run_id', '=', f.run.id).execute();
+    expect(events).toHaveLength(1);
+    expect((await api.get(`/api/daemons/${f.source.daemonId}/handoffs/pending`).set('Authorization', auth(f.source.authToken)).expect(200)).body.requests).toEqual([]);
+    const started = await ready();
+    await api.post(`/api/daemons/${started.source.daemonId}/handoffs/${started.handoff.id}/failure`).set('Authorization', auth(started.source.authToken)).send(body).expect(400);
   });
 });

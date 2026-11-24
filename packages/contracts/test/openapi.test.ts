@@ -78,6 +78,7 @@ describe('Phase 1 OpenAPI freeze', () => {
     ['CloudSnapshotManifest', contracts.cloudSnapshotManifestSchema],
     ['HandoffCreateRequest', contracts.handoffCreateRequestSchema.partial({ idempotencyKey: true })],
     ['HandoffSnapshotRequest', contracts.handoffSnapshotRequestSchema],
+    ['HandoffFailureRequest', contracts.handoffFailureRequestSchema],
     ['CloudLifecycleRequest', contracts.cloudLifecycleRequestSchema],
     ['ExecutionCheckpoint', contracts.executionCheckpointSchema],
     ['DaemonRegistration', contracts.daemonRegistrationSchema],
@@ -232,6 +233,8 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(schemas.RunProgress.properties.type.enum).toEqual(['running', 'output', 'checkpoint', 'completed', 'failed', 'cancelled', 'waiting_input']);
     expect(api.paths['/api/sessions/{id}/handoff'].post.security).toEqual([{ ConsoleBearer: [] }]);
     expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.security).toEqual([{ DaemonBearer: [] }]);
+    expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/failure'].post.security).toEqual([{ DaemonBearer: [] }]);
+    expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/failure'].post.requestBody.content['application/json'].schema).toEqual(ref('HandoffFailureRequest'));
     expect(api.paths['/api/daemons/{id}/runs/{runId}/cloud'].post.requestBody.content['application/json'].schema).toEqual(ref('CloudLifecycleRequest'));
   });
 });

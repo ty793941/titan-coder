@@ -12,6 +12,7 @@ import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
 import { qrspiArtifactStages } from '../tasks/qrspi-gate.js';
 import { controlPlaneArtifactRoot, readArtifactContent, type ArtifactContentRoot } from './artifact-content.js';
+import { cloudArtifactScope } from './cloud-artifact-scope.js';
 
 const identifier = z.string().trim().min(1).max(200);
 const artifactInputSchema = z.object({
@@ -38,8 +39,9 @@ export class ArtifactsService {
       const existing = await this.idempotency.read<Artifact>(trx, `task:${taskId}:artifact:create`, idempotencyKey, parsed);
       if (existing) return existing;
       if (parsed.sessionId) {
-        const session = await trx.selectFrom('session').select('id').where('id', '=', parsed.sessionId).where('task_id', '=', taskId).executeTakeFirst();
+        const session = await trx.selectFrom('session').select(['id', 'environment_type']).where('id', '=', parsed.sessionId).where('task_id', '=', taskId).executeTakeFirst();
         if (!session) throw new DomainError('VALIDATION_FAILED', 'artifact session must belong to its task');
+        if (session.environment_type === 'cloud') throw new DomainError('PERMISSION_DENIED', 'cloud artifacts require authenticated daemon progress');
       }
       if (parsed.sourceArtifacts?.length) {
         const sources = await trx.selectFrom('artifact').select('artifact_id').where('artifact_id', 'in', parsed.sourceArtifacts)
@@ -122,9 +124,15 @@ export class ArtifactsService {
     const roots: ArtifactContentRoot[] = [{ workspacePath: resolve(artifactRoot, '../..'), artifactRoot,
       expectedPath: resolve(artifactRoot, `${artifact.artifactId}-v${artifact.version}.md`) }];
     if (artifact.sessionId) {
-      const session = await this.database.db.selectFrom('session').select(['task_id', 'execution_config']).where('id', '=', artifact.sessionId).executeTakeFirst();
+      const session = await this.database.db.selectFrom('session').select(['task_id', 'execution_config', 'environment_type']).where('id', '=', artifact.sessionId).executeTakeFirst();
       if (!session || session.task_id !== artifact.taskId) throw new DomainError('PERMISSION_DENIED', 'artifact session does not match its task');
       const config = z.object({ workspacePath: z.string().startsWith('/') }).passthrough().safeParse(session.execution_config);
+      let cloudScope: ArtifactContentRoot | undefined;
+      if (session.environment_type === 'cloud') {
+        if (artifact.createdBy.type !== 'daemon' || !artifact.reference) throw new DomainError('PERMISSION_DENIED', 'cloud artifact has no authenticated daemon provenance');
+        cloudScope = await cloudArtifactScope(this.database.db, artifact.sessionId, artifact.createdBy.id);
+        roots.length = 0;
+      }
       if (config.success && artifact.reference) {
         const reference = /^artifact:\/\/([0-9a-f-]{36})\/(.+)$/i.exec(artifact.reference);
         if (!reference) throw new DomainError('PERMISSION_DENIED', 'artifact reference is invalid');
@@ -134,8 +142,9 @@ export class ArtifactsService {
         if (logicalPath.startsWith('/') || logicalPath.includes('\\') || logicalPath.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
           throw new DomainError('PERMISSION_DENIED', 'artifact reference escapes its artifact directory');
         }
-        const workspaceRoot = resolve(config.data.workspacePath, '.titan', 'artifacts');
-        roots.push({ workspacePath: config.data.workspacePath, artifactRoot: workspaceRoot,
+        const workspacePath = cloudScope?.workspacePath ?? config.data.workspacePath;
+        const workspaceRoot = resolve(workspacePath, '.titan', 'artifacts');
+        roots.push({ ...(cloudScope ?? {}), workspacePath, artifactRoot: workspaceRoot,
           expectedPath: resolve(workspaceRoot, reference[1]!, logicalPath) });
       }
     }
