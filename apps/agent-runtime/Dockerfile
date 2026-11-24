@@ -17,11 +17,14 @@ RUN pnpm --filter @titan/agent-runtime... build \
 
 FROM node:22-bookworm-slim AS worker
 WORKDIR /opt/titan
+COPY --from=build /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm
+RUN ln -s ../lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm
 COPY --from=build /runtime ./apps/agent-runtime
 ENV HOME=/tmp/titan-home
 ENV CODEX_HOME=/tmp/titan-home/.codex
 USER node
-RUN node --input-type=module -e "await import('./apps/agent-runtime/dist/container-worker.js')"
+RUN test "$(pnpm --version)" = "10.34.5" \
+    && node --input-type=module -e "await import('./apps/agent-runtime/dist/container-worker.js')"
 ENTRYPOINT ["node", "/opt/titan/apps/agent-runtime/dist/container-worker.js"]
 
 FROM worker AS runtime

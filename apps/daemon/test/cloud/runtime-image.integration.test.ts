@@ -10,6 +10,13 @@ const image = process.env.TITAN_RUNTIME_TEST_IMAGE ?? 'titan-session:phase2a';
 const docker = (args: string[]) => execFileSync('docker', args, { encoding: 'utf8', stdio: 'pipe', timeout: 15_000, maxBuffer: 1024 * 1024 }).trim();
 
 describe.skipIf(!enabled)('real container worker image', () => {
+  it('provides pnpm 10.34.5 for offline trusted-code tests as a non-root user', () => {
+    const options = ['run', '--rm', '--pull=never', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--user=1000:1000', '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777'];
+    expect(docker([...options, '--entrypoint=pnpm', image, '--version'])).toBe('10.34.5');
+    const setup = `const fs = require('node:fs'); fs.writeFileSync('/tmp/package.json', JSON.stringify({ packageManager: 'pnpm@10.34.5', scripts: { test: 'node smoke.cjs' } })); fs.writeFileSync('/tmp/smoke.cjs', 'console.log("trusted-code-smoke-ok")')`;
+    expect(docker([...options, '--workdir=/tmp', '--entrypoint=sh', image, '-c', 'node -e "$1" && pnpm test', 'pnpm-smoke', setup])).toContain('\ntrusted-code-smoke-ok');
+  });
+
   it('runs missing-credential dispatch to waiting_input with recoverable logs and read-only isolation', async () => {
     const metadata = JSON.parse(docker(['image', 'inspect', image]))[0];
     expect(metadata.Os).toBe('linux');

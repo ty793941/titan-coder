@@ -14,9 +14,10 @@
 ```bash
 docker build --pull=false -f apps/agent-runtime/Dockerfile -t titan-session:phase2a .
 docker run --rm --network=none --entrypoint=codex titan-session:phase2a --version
+docker run --rm --network=none --read-only --user=1000:1000 --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777 --entrypoint=pnpm titan-session:phase2a --version
 ```
 
-第二条命令应输出 `codex-cli 0.172.0`。镜像中的 Codex 是 Linux 版本；宿主 macOS 应用中的 Codex 二进制不会复制进镜像。
+第二条命令应输出 `codex-cli 0.172.0`，第三条应输出 `10.34.5`。worker stage 从 Linux build stage 复制固定版本的 pnpm，完整 runtime 镜像继承该命令，支持显式允许 `trustedCode` 时执行 `pnpm test`；运行时无需下载 pnpm。镜像中的 Codex 是 Linux 版本；宿主 macOS 应用中的 Codex 二进制不会复制进镜像。
 
 ## 宿主 Daemon 配置
 
@@ -94,7 +95,7 @@ TITAN_RUNTIME_IMAGE_TESTS=1 TITAN_CODEX_IMAGE_TESTS=1 \
 TITAN_CLOUD_E2E=1 pnpm --filter @titan/control-plane test -- cloud-daemon.e2e.test.ts
 ```
 
-真实 Docker E2E 使用本地 fixture Runtime，不调用付费模型；它验证源 Daemon、Cloud Executor、容器、Snapshot、Checkpoint、Artifact、Secret 边界和清理时序。完整 Linux Codex 镜像 smoke 会额外验证固定 Codex 版本，但不会调用 Provider。
+真实 Docker E2E 使用本地 fixture Runtime，不调用付费模型；它验证源 Daemon、Cloud Executor、容器、Snapshot、Checkpoint、Artifact、Secret 边界和清理时序。Runtime 镜像 smoke 会在非 root、只读根和断网条件下验证 pnpm 固定版本并实际执行无依赖 fixture 的 `pnpm test`。完整 Linux Codex 镜像 smoke 会额外验证固定 Codex 版本，但不会调用 Provider。
 
 ## 当前边界
 

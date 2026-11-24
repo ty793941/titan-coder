@@ -29,4 +29,13 @@ describe('cloud worker packaging', () => {
     expect(guide).toContain('bridge');
     expect(guide).toContain('主代理');
   });
+
+  it('copies the pinned pnpm into the final worker stage and verifies it as the worker user', async () => {
+    const dockerfile = await readFile(new URL('apps/agent-runtime/Dockerfile', repository), 'utf8');
+    const worker = dockerfile.split('FROM node:22-bookworm-slim AS worker\n')[1]?.split('FROM worker AS runtime')[0];
+    expect(worker).toBeDefined();
+    expect(worker).toContain('COPY --from=build /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm');
+    expect(worker).toContain('ln -s ../lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm');
+    expect(worker?.split('USER node')[1]).toContain('test "$(pnpm --version)" = "10.34.5"');
+  });
 });
