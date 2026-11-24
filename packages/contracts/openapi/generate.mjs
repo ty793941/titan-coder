@@ -11,6 +11,7 @@ function jsonSchema(schema) {
     case 'ZodDefault': return { ...jsonSchema(def.innerType), default: def.defaultValue() };
     case 'ZodEffects': return jsonSchema(def.schema);
     case 'ZodUnknown': return {};
+    case 'ZodBoolean': return { type: 'boolean' };
     case 'ZodLiteral': return { type: typeof def.value, const: def.value };
     case 'ZodEnum': return { type: 'string', enum: def.values };
     case 'ZodString': {
@@ -72,6 +73,10 @@ const schemas = Object.fromEntries(Object.entries({
   SessionCreateRequest: source.sessionCreateRequestSchema.partial({ idempotencyKey: true }),
   RunCreateRequest: source.runCreateRequestSchema.partial({ idempotencyKey: true }),
   ExecutionConfig: source.executionConfigSchema,
+  CloudSnapshotManifest: source.cloudSnapshotManifestSchema,
+  HandoffCreateRequest: source.handoffCreateRequestSchema.partial({ idempotencyKey: true }),
+  HandoffSnapshotRequest: source.handoffSnapshotRequestSchema,
+  CloudLifecycleRequest: source.cloudLifecycleRequestSchema,
   ExecutionCheckpoint: source.executionCheckpointSchema,
   RunProgress: source.runProgressSchema,
   ProgressOutput: source.progressOutputSchema,
@@ -86,7 +91,8 @@ schemas.SessionCreateRequest.properties.execution = ref('ExecutionConfig');
 schemas.SessionCreateRequest.description = 'execution 可省略；真实执行必须提供最新已批准 Plan 的 planHash。daemonId 如提供，必须与 execution.daemonId 一致。';
 schemas.RunCreateRequest.description = '供创建 Run 与恢复 paused Run 共用。checkpointId、planHash 均可省略，显式 checkpointId 必须属于同一 Session。resume 未指定 checkpointId 时选取源 Run 最新检查点，没有检查点则创建无检查点的新尝试；旧 Run 保持 paused。inputSnapshotId 当前仅被接受，不持久化、不恢复上下文。';
 schemas.ExecutionConfig.properties.credentialRef.description = '本机凭证引用；只允许引用，不允许模型 API Key 明文。';
-schemas.ExecutionConfig.description = '只支持 ready 的 local Daemon，runtime 必须在 capabilities 中；workspacePath 必须为绝对路径且位于已注册 workspaceRoots 内。';
+schemas.ExecutionConfig.description = 'environmentType 省略按 local 处理，保留 baseUrlRef。local 工作区须位于 Daemon 注册根目录；cloud 仅由 Handoff 创建，使用 /workspace/session 虚拟路径与 snapshot://、lease:// 引用，要求 runtime 及 cloud-session/container/snapshot-transfer/secret-lease 能力。条件通过 validateExecutionConfig 检查，基础 Schema 保留 ZodObject。';
+schemas.ExecutionConfig.allOf = [{ if: { properties: { environmentType: { const: 'cloud' } }, required: ['environmentType'] }, then: { required: ['snapshotManifestRef', 'secretLeaseRef'], properties: { workspacePath: { const: '/workspace/session' } } } }];
 schemas.ExecutionCheckpoint.properties.successfulTools.items.required.push('output');
 schemas.ExecutionCheckpoint.description = '恢复记录；控制面脱敏后 JSON 的 UTF-8 字节大小不得超过 1 MiB。output 必须存在，可以为任意 JSON 值（含 null）。';
 // JSON Schema pattern 没有 JS 的 i 标记，需要显式覆盖现有引用正则的大小写集合。
@@ -105,7 +111,7 @@ Object.assign(schemas, {
   Project: object({ id, name: text, goal: text, createdAt: date, version: positive }),
   Task: object({ id, projectId: id, title: text, goal: text, acceptanceCriteria: array(text), priority: jsonSchema(source.prioritySchema),
     stage: jsonSchema(source.taskStageSchema), status: { type: 'string', enum: ['active', 'blocked', 'paused', 'cancelled', 'failed', 'completed'] }, version: positive, createdAt: date }),
-  Session: object({ id, taskId: id, status: ref('ExecutionStatus'), entryAgent: { type: 'string', const: 'project-manager' }, planHash: id, createdAt: date },
+  Session: object({ id, taskId: id, status: ref('ExecutionStatus'), entryAgent: { type: 'string', const: 'project-manager' }, planHash: id, createdAt: date, environmentType: { type: 'string', enum: ['local', 'cloud'] }, parentSessionId: id },
     ['id', 'taskId', 'status', 'entryAgent', 'createdAt']),
   Run: object({ id, sessionId: id, attempt: positive, status: ref('ExecutionStatus'), checkpointId: id, errorCode: text, createdAt: date },
     ['id', 'sessionId', 'attempt', 'status', 'createdAt']),
@@ -118,7 +124,7 @@ Object.assign(schemas, {
   ClaimRequest: object({}),
   FailRequest: object({ errorCode: { default: 'TOOL_EXECUTION_FAILED', description: '无运行时类型校验；调用者应使用字符串。null 同缺省值。' } }, [], false),
   RunDispatch: object({ jobId: id, runId: id, sessionId: id, taskId: id, projectId: id, goal: text, planHash: id,
-    config: ref('ExecutionConfig'), claimToken: { type: 'string', pattern: '^[a-f0-9]{64}$' }, checkpoint: ref('ExecutionCheckpoint') },
+    config: ref('ExecutionConfig'), claimToken: { type: 'string', pattern: '^[a-f0-9]{64}$' }, checkpoint: ref('ExecutionCheckpoint'), cloud: ref('CloudDispatch') },
     ['jobId', 'runId', 'sessionId', 'taskId', 'projectId', 'goal', 'planHash', 'config', 'claimToken']),
   ProgressAck: object({ accepted: bool, status: ref('ExecutionStatus'), cancelRequested: bool }),
   RunControl: object({ cancelRequested: bool, status: ref('ExecutionStatus') }),
@@ -131,6 +137,12 @@ Object.assign(schemas, {
   DaemonStoredEvent: object({ eventId: id, sequence: { ...positive, maximum: Number.MAX_SAFE_INTEGER }, eventType: id, payload: {}, status: text }),
   ApiError: object({ code: { type: 'string', enum: [...errorCodes, 'INTERNAL_ERROR'] }, message: text, details: { type: 'object', additionalProperties: true }, traceId: text, retryable: bool, occurredAt: date }),
   StreamError: object({ code: { type: 'string', enum: ['EVENT_SEQUENCE_GAP', 'INTERNAL_ERROR'] }, message: text, retryable: bool }),
+  CloudDispatch: object({ executionId: id, snapshot: ref('CloudSnapshotManifest'), secretLeaseId: id, secretLeaseExpiresAt: date }),
+  CloudLifecycleAck: object({ executionId: id, status: jsonSchema(source.cloudExecutionStatusSchema), secretConsumed: bool, leaseExpiresAt: date }),
+  Handoff: object({ id, taskId: id, sourceSessionId: id, sourceRunId: id, targetSessionId: { type: ['string', 'null'] }, checkpointId: id, status: { type: 'string', enum: ['requested', 'starting', 'completed', 'failed'] }, requestedBy: { type: 'string', const: 'local-user' }, workspaceSync: object({ mode: { type: 'string', enum: ['git-snapshot', 'git-patch'] } }), manifest: { anyOf: [ref('CloudSnapshotManifest'), { type: 'null' }] }, errorCode: { type: ['string', 'null'] }, createdAt: date, completedAt: { type: ['string', 'null'], format: 'date-time' }, version: positive }),
+  PendingHandoffs: object({ requests: { ...array(object({ id, sourceSessionId: id, sourceRunId: id, checkpointId: id, workspacePath: text, baseRevision: text }, ['id', 'sourceSessionId', 'sourceRunId', 'checkpointId', 'workspacePath'])), maxItems: 100 } }),
+  CloudExecution: object({ id, sessionId: id, runId: id, daemonId: id, handoffId: { type: ['string', 'null'] }, status: jsonSchema(source.cloudExecutionStatusSchema), containerId: { type: ['string', 'null'] }, attempt: positive, errorCode: { type: ['string', 'null'] }, leaseExpiresAt: { type: ['string', 'null'], format: 'date-time' }, lastHeartbeatAt: { type: ['string', 'null'], format: 'date-time' }, createdAt: date, endedAt: { type: ['string', 'null'], format: 'date-time' }, version: positive }),
+  CloudCancelRequest: jsonSchema(z.object({ idempotencyKey: z.string().trim().min(1).max(200).optional() }).strict()),
 });
 // allOf 的基类需允许注册响应扩展字段。
 schemas.DaemonView.additionalProperties = true;
@@ -228,7 +240,7 @@ operation('get', '/api/runs/{runId}/events', 'streamRunEvents', '重放或跟随
   }, content: { 'text/event-stream': { schema: { type: 'string' }, example: 'id: 1\nevent: run.created\ndata: {"eventId":"evt_1","eventType":"run.created","payloadVersion":1,"sequence":1,"traceId":"trace_1","projectId":"project_1","runId":"run_1","actor":{"type":"system","id":"control-plane"},"occurredAt":"2026-11-21T00:00:00.000Z","payload":{}}\n\n' } } } },
   extensions: { 'x-sse-data-schema': ref('EventEnvelope'), 'x-sse-error-schema': ref('StreamError') },
 });
-operation('post', '/api/daemons/register', 'registerDaemon', '注册 Daemon', { body: 'DaemonRegistration', description: '本机开发入口当前不要求 Bearer；每次调用创建新 daemonId 与令牌，不支持 Idempotency-Key 去重。cloud 仅允许能力声明，执行策略拒绝 cloud 作业。', responses: { '201': response('Daemon 元数据及一次性返回的 authToken。', ref('DaemonRegistrationResponse')) } });
+operation('post', '/api/daemons/register', 'registerDaemon', '注册 Daemon', { body: 'DaemonRegistration', description: '本机开发入口当前不要求 Bearer；每次调用创建新 daemonId 与令牌，不支持 Idempotency-Key 去重。cloud 执行要求 runtime 及四项云端能力、ready 心跳和容量。', responses: { '201': response('Daemon 元数据及一次性返回的 authToken。', ref('DaemonRegistrationResponse')) } });
 operation('get', '/api/daemons/{daemonId}', 'getDaemon', '查询 Daemon 状态', { description: '当前公开读取本机元数据。lastHeartbeatAt 距今超过 30s 显示 reconnecting、超过 90s 显示 disconnected；revoked 优先。', responses: { '200': response('不含认证令牌或哈希。', ref('DaemonView')) } });
 operation('post', '/api/daemons/{daemonId}/heartbeat', 'heartbeatDaemon', '更新 Daemon 心跳', { auth: true, body: 'DaemonHeartbeatRequest', bodyRequired: false, responses: { '200': response('服务端接收时间与 ready 状态。', ref('DaemonView')) } });
 operation('post', '/api/daemons/{daemonId}/revoke', 'revokeDaemon', '撤销当前认证 Daemon', { auth: true, responses: { '204': response('无正文；后续认证返回 PERMISSION_DENIED。') } });
@@ -239,17 +251,34 @@ operation('post', '/api/daemons/{daemonId}/runs/{runId}/progress', 'reportRunPro
 operation('get', '/api/daemons/{daemonId}/runs/{runId}/control', 'getRunControl', '轮询取消或暂停停止信号与 Run 状态', { auth: true, description: '暂停复用 cancelRequested=true 并返回 status=paused，请求 Daemon 停止进程。ready Daemon 对有效 claimed 作业的轮询会续租 120s；paused 作业不续租。resume 通过用户侧 REST 创建新 Run，不在此轮询中热恢复。', responses: { '200': response('停止标记和 Run 状态。', ref('RunControl')) } });
 operation('get', '/api/daemons/{daemonId}/runs/{runId}/job', 'getExecutionJob', '查询调度作业及进度游标', { auth: true, responses: { '200': response('Daemon 归属校验后的作业元数据，不含 claimToken。', ref('ExecutionJob')) } });
 
+operation('post', '/api/sessions/{id}/handoff', 'requestHandoff', '请求本机到云端交接', { auth: 'console', body: 'HandoffCreateRequest', idempotency: true, description: 'Console Bearer 认证后以 local-user 记账。源 Session 与 checkpoint 所属 Run 必须 paused，checkpoint 必须为源 Run 当前检查点。仅创建 requested，不访问文件、不创建目标 Session。同键同请求返回原响应，异正文 409；请求头 Idempotency-Key 优先。', responses: { '201': response('新 requested Handoff。', ref('Handoff')), '200': response('幂等重放。', ref('Handoff')) } });
+operation('get', '/api/handoffs/{id}', 'getHandoff', '查询交接事实', { auth: 'console', responses: { '200': response('交接与清单元数据。', ref('Handoff')) } });
+operation('get', '/api/daemons/{id}/handoffs/pending', 'pendingHandoffs', '领取源 Daemon 待导出交接', { auth: true, description: '仅返回当前认证源 Daemon 的 requested，最多100条；workspacePath 来自已授权源 Session，baseRevision 可省略。', responses: { '200': response('待导出的请求。', ref('PendingHandoffs')) } });
+operation('post', '/api/daemons/{id}/handoffs/{handoffId}/snapshot', 'acknowledgeHandoffSnapshot', '确认停止并登记 Snapshot 清单', { auth: true, body: 'HandoffSnapshotRequest', description: 'stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。', responses: { '200': response('starting Handoff 或相同清单重放。', ref('Handoff')) } });
+operation('post', '/api/daemons/{id}/runs/{runId}/cloud', 'reportCloudLifecycle', '上报独立容器生命周期与消费租约', { auth: true, body: 'CloudLifecycleRequest', description: '校验 Daemon Bearer、job归属、claimToken、双执行租约及状态转移。consumeSecret:true 以CAS单次消费Secret Lease，重复409，不返回Secret。生命周期不修改Run状态，不占用RunProgress.sequence。容器ID首次登记后不可改变。', responses: { '200': response('生命周期及消费确认。', ref('CloudLifecycleAck')) } });
+operation('get', '/api/cloud-executions/{id}', 'getCloudExecution', '查询云端执行并核对失联事实', { auth: 'console', description: '观察到失联或租约过期时将claimed作业隔离为blocked、Session/Run标记reconnecting、撤销凭证租约，保留容器最后已知状态；不会自动重执行。', responses: { '200': response('不含凭证或claimToken的执行事实。', ref('CloudExecution')) } });
+operation('post', '/api/cloud-executions/{id}/cancel', 'cancelCloudExecution', '幂等取消云端执行', { auth: 'console', body: 'CloudCancelRequest', bodyRequired: false, idempotency: false, description: 'Console Bearer；正文为空或仅idempotencyKey，请求头可提供Idempotency-Key。以终态天然幂等，在同一事务更新Run/Session/job/cloud/Handoff、撤销Secret Lease并写Outbox。响应不证明容器已经停止。', responses: { '200': response('当前云端执行事实。', ref('CloudExecution')) } });
+
+for (const action of ['pause', 'resume', 'cancel']) {
+  const operation = paths[`/api/runs/{runId}/${action}`].post;
+  operation.description += ' 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。';
+  operation['x-cloud-security'] = [{ ConsoleBearer: [] }];
+  operation.responses['401'] = errorResponse;
+}
+paths['/api/daemons/{daemonId}/runs/{runId}/control'].get.description += ' cloud同时续期job和cloud_execution的120秒租约；任一过期或Daemon失联则隔离为blocked并持久标记reconnecting，停止信号为true。Secret Lease固定有效期不续期。';
+paths['/api/daemons/{daemonId}/runs/{runId}/progress'].post.description += ' cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。';
+
 const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
-  info: { title: 'Titan Phase 1 Control Plane', version: '1.1.0', description: '按现有 NestJS Controller 与 Zod 冻结的 HTTP/JSON + SSE 契约，包含 pause 与创建新 Run 的 resume；不提供原进程或原生模型会话热恢复。ConnectRPC、跨环境 Handoff、Git Snapshot 传输仅冻结预留协议。认证覆盖以各操作 security 为准。' },
+  info: { title: 'Titan Control Plane', version: '1.2.0', description: 'HTTP/JSON + SSE 契约，包含本机执行及有界云端Handoff控制面。Snapshot实际导出、Secret解析及容器执行由宿主Daemon负责，不提供原生模型进程热迁移。认证覆盖以各操作security为准。' },
   servers: [{ url: 'http://127.0.0.1:3000', description: '本机默认端口；CONTROL_PLANE_PORT 可覆盖。' }], security: [],
   'x-generation': { source: 'packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts', template: 'packages/contracts/openapi/generate.mjs', templateVersion: 3, generatedAt: new Date().toISOString() },
-  'x-reserved-only': ['ConnectRPC', 'SessionHandoff', 'GitSnapshotTransfer'],
+  'x-reserved-only': ['ConnectRPC', 'RemoteGitSnapshotTransfer'],
   paths,
   components: {
     securitySchemes: {
       DaemonBearer: { type: 'http', scheme: 'bearer', bearerFormat: '64 lowercase hexadecimal characters', description: 'Authorization: Bearer <authToken>，绑定路径 daemonId；只用于 Daemon API。模型凭证通过 credentialRef 在本机解析。' },
-      ConsoleBearer: { type: 'http', scheme: 'bearer', description: 'Authorization: Bearer <TITAN_CONSOLE_TOKEN>；仅用于新增控制台状态与工件正文接口。由本机服务端环境配置，未设置时拒绝访问；不是模型 API Key。' },
+      ConsoleBearer: { type: 'http', scheme: 'bearer', description: 'Authorization: Bearer <TITAN_CONSOLE_TOKEN>；用于控制台、工件正文、Handoff和Cloud管理。由本机服务端环境配置，未设置时拒绝访问；不是模型API Key。' },
     },
     parameters: {
       IdempotencyKey: { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', minLength: 1, maxLength: 200 }, description: 'Project/Task/Session/Run 创建及 Run resume 可改用正文 idempotencyKey，请求头优先；trim 后校验长度，不是 Daemon 事件去重键。' },

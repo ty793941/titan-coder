@@ -21,8 +21,8 @@ export class RunsController {
 
   @Post('/runs/:runId/pause')
   @HttpCode(200)
-  pause(@Param('runId') runId: string) {
-    return this.runs.pause(runId);
+  pause(@Param('runId') runId: string, @Headers('authorization') authorization?: string) {
+    return this.runs.pause(runId, authorization);
   }
 
   @Post('/runs/:runId/resume')
@@ -30,8 +30,9 @@ export class RunsController {
     @Param('runId') runId: string,
     @Body() body: unknown,
     @Headers('idempotency-key') idempotencyKey?: string,
+    @Headers('authorization') authorization?: string,
   ) {
-    return this.runs.resume(runId, body, idempotencyKey);
+    return this.runs.resume(runId, body, idempotencyKey, authorization);
   }
 
   @Post('/runs/:runId/fail')
@@ -48,7 +49,7 @@ export class RunsController {
 
   @Post('/runs/:runId/cancel')
   @HttpCode(200)
-  cancel(@Param('runId') runId: string) {
-    return this.runs.cancel(runId);
+  cancel(@Param('runId') runId: string, @Headers('authorization') authorization?: string) {
+    return this.runs.cancel(runId, authorization);
   }
 }

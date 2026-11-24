@@ -9,6 +9,7 @@ import type { Database, JsonValue } from '../../database/types.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { EventsService } from '../events/events.service.js';
 import { canonicalJson, daemonStatus, latestApprovedPlan, sameToken, tokenHash, validateExecution } from './execution-policy.js';
+import { CloudExecutionsService } from '../cloud-executions/cloud-executions.service.js';
 
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const leaseMs = 120000;
@@ -77,6 +78,7 @@ export class ExecutionService {
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @Inject(EventsService) private readonly events: EventsService,
+    @Inject(CloudExecutionsService) private readonly cloud: CloudExecutionsService,
   ) {}
 
   async claim(daemonId: string): Promise<RunDispatch | undefined> {
@@ -107,6 +109,7 @@ export class ExecutionService {
           await trx.updateTable('execution_job').set({ status: 'blocked' }).where('id', '=', job.id).execute();
           await trx.updateTable('run').set(eb => ({ status: 'waiting_input', error_code: 'PLAN_HASH_STALE', version: eb('version', '+', 1) })).where('id', '=', job.run_id).execute();
           await trx.updateTable('session').set(eb => ({ status: 'waiting_input', version: eb('version', '+', 1) })).where('id', '=', context.session_id).execute();
+          await this.cloud.finish(trx, job.run_id, 'failed', 'PLAN_HASH_STALE');
           await this.events.append(trx, { eventType: 'run.waiting_input', projectId: context.project_id, taskId: context.task_id,
             sessionId: context.session_id, runId: job.run_id, actor: { type: 'system', id: 'control-plane' }, payload: { errorCode: 'PLAN_HASH_STALE' } });
           continue;
@@ -121,11 +124,26 @@ export class ExecutionService {
           checkpoint = normalizeCheckpoint(saved.snapshot);
         }
         const claimToken = randomBytes(32).toString('hex');
-        await trx.updateTable('execution_job').set({ status: 'claimed', claim_token_hash: tokenHash(claimToken), lease_expires_at: new Date(Date.now() + leaseMs) }).where('id', '=', job.id).execute();
+        const leaseExpiresAt = new Date(Date.now() + leaseMs);
+        let cloud: RunDispatch['cloud'];
+        if (config.environmentType === 'cloud') {
+          try { cloud = await this.cloud.dispatch(trx, job.run_id, leaseExpiresAt); }
+          catch (error) {
+            if (!(error instanceof DomainError) || error.code !== 'CLOUD_SECRET_LEASE_EXPIRED') throw error;
+            await trx.updateTable('execution_job').set({ status: 'blocked' }).where('id', '=', job.id).execute();
+            await trx.updateTable('run').set(eb => ({ status: 'waiting_input', error_code: error.code, version: eb('version', '+', 1) })).where('id', '=', job.run_id).execute();
+            await trx.updateTable('session').set(eb => ({ status: 'waiting_input', version: eb('version', '+', 1) })).where('id', '=', context.session_id).execute();
+            await this.cloud.finish(trx, job.run_id, 'failed', error.code);
+            await this.events.append(trx, { eventType: 'run.waiting_input', projectId: context.project_id, taskId: context.task_id, sessionId: context.session_id, runId: job.run_id, actor: { type: 'system', id: 'control-plane' }, payload: { errorCode: error.code } });
+            continue;
+          }
+        }
+        await trx.updateTable('execution_job').set({ status: 'claimed', claim_token_hash: tokenHash(claimToken), lease_expires_at: leaseExpiresAt }).where('id', '=', job.id).execute();
         return {
           jobId: job.id, runId: job.run_id, sessionId: context.session_id, taskId: context.task_id,
           projectId: context.project_id, goal: job.goal, planHash: job.plan_hash, config, claimToken,
           ...(checkpoint ? { checkpoint } : {}),
+          ...(cloud ? { cloud } : {}),
         };
       }
       return undefined;
@@ -156,6 +174,10 @@ export class ExecutionService {
       if (run.status === 'paused') return { accepted: false, status: 'paused', cancelRequested: true };
       if (terminal.has(run.status)) return ack(false);
       if (!job.lease_expires_at || job.lease_expires_at.getTime() <= Date.now() || job.status !== 'claimed') throw new DomainError('PERMISSION_DENIED', 'claim lease expired');
+      if (executionConfigSchema.parse(job.config).environmentType === 'cloud') {
+        const execution = await trx.selectFrom('cloud_execution').select('lease_expires_at').where('run_id', '=', runId).executeTakeFirstOrThrow();
+        if (!execution.lease_expires_at || execution.lease_expires_at.getTime() <= Date.now()) throw new DomainError('PERMISSION_DENIED', 'cloud lease expired');
+      }
       if (input.sequence !== Number(job.last_sequence) + 1) throw new DomainError('EVENT_SEQUENCE_GAP', 'progress sequence must be contiguous');
       await trx.insertInto('execution_progress').values({ event_id: input.eventId, job_id: job.id, sequence: input.sequence, request_hash: requestHash }).execute();
       if (checkpoint) {
@@ -176,6 +198,9 @@ export class ExecutionService {
       await trx.updateTable('execution_job').set({ status: terminal.has(status) || status === 'waiting_input' ? status : 'claimed', last_sequence: input.sequence,
         lease_expires_at: new Date(Date.now() + leaseMs), ...(status === 'cancelled' ? { cancel_requested: true } : {}),
       }).where('id', '=', job.id).execute();
+      await this.cloud.renew(trx, runId, new Date(Date.now() + leaseMs));
+      await this.cloud.finish(trx, runId, status, input.type === 'failed' ? this.progressErrorCode(input.payload) : undefined);
+      if (status === 'waiting_input') await this.cloud.finish(trx, runId, 'failed', 'CLOUD_RUNTIME_WAITING_INPUT');
       const output = this.progressOutput(input.payload);
       if (output) await this.recordProgressAudit(trx, runId, daemonId, input.eventId, output);
       const safePayload = redactSecrets(input.payload) as Record<string, unknown>;
@@ -210,6 +235,8 @@ export class ExecutionService {
       }
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id')
         .select(['session.id as session_id', 'task.id as task_id', 'task.project_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
+      const isCloud = executionConfigSchema.parse(job.config).environmentType === 'cloud';
+      if (isCloud) { await this.cloud.disconnect(trx, run.id); continue; }
       const status = run.checkpoint_id ? 'paused' : 'waiting_input';
       await trx.updateTable('execution_job').set({ status: 'blocked', cancel_requested: true, claim_token_hash: null, lease_expires_at: null }).where('id', '=', job.id).execute();
       await trx.updateTable('run').set({ status, error_code: 'EXECUTION_LEASE_EXPIRED', version: run.version + 1 }).where('id', '=', run.id).execute();
@@ -298,8 +325,14 @@ export class ExecutionService {
         .where('execution_job.daemon_id', '=', daemonId).where('run.id', '=', runId).forUpdate().executeTakeFirst();
       if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'execution job was not found');
       const now = new Date();
+      const execution = await trx.selectFrom('cloud_execution').select('lease_expires_at').where('run_id', '=', runId).executeTakeFirst();
+      if (execution && row.job_status === 'claimed' && (daemonStatus(daemon) !== 'ready' || !row.lease_expires_at || row.lease_expires_at.getTime() <= now.getTime() || !execution.lease_expires_at || execution.lease_expires_at.getTime() <= now.getTime())) {
+        await this.cloud.disconnect(trx, runId);
+        return { cancelRequested: true, status: 'reconnecting' };
+      }
       if (daemonStatus(daemon) === 'ready' && row.job_status === 'claimed' && row.lease_expires_at && row.lease_expires_at.getTime() > now.getTime()) {
         await trx.updateTable('execution_job').set({ lease_expires_at: new Date(now.getTime() + leaseMs) }).where('id', '=', row.id).execute();
+        await this.cloud.renew(trx, runId, new Date(now.getTime() + leaseMs));
       }
       return { cancelRequested: row.cancel_requested || row.status === 'paused', status: row.status };
     });

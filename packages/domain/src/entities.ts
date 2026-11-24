@@ -46,6 +46,8 @@ export type Session = {
   status: ExecutionStatus;
   entryAgent: 'project-manager';
   planHash?: string;
+  environmentType?: 'local' | 'cloud';
+  parentSessionId?: SessionId;
   createdAt: string;
 };
 

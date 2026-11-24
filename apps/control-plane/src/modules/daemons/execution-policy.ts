@@ -1,7 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { isAbsolute, relative } from 'node:path';
-import { DomainError } from '@titan/contracts';
-import type { ExecutionConfig } from '@titan/daemon-protocol';
+import { DomainError, validateExecutionConfig } from '@titan/contracts';
 import type { Kysely, Transaction } from 'kysely';
 import type { Database } from '../../database/types.js';
 
@@ -34,12 +33,18 @@ export async function latestApprovedPlan(db: Kysely<Database> | Transaction<Data
   return plan;
 }
 
-export async function validateExecution(db: Kysely<Database> | Transaction<Database>, config: Pick<ExecutionConfig, 'daemonId' | 'runtime' | 'workspacePath'>): Promise<void> {
+export const cloudCapabilities = ['cloud-session', 'container', 'snapshot-transfer', 'secret-lease'];
+
+export async function validateExecution(db: Kysely<Database> | Transaction<Database>, config: ReturnType<typeof validateExecutionConfig>): Promise<void> {
+  validateExecutionConfig(config);
   const daemon = await db.selectFrom('daemon').selectAll().where('id', '=', config.daemonId).executeTakeFirst();
   if (!daemon || daemonStatus(daemon) !== 'ready') throw new DomainError('DAEMON_UNAVAILABLE', 'execution daemon must be ready');
-  if (daemon.environment_type !== 'local' || !(daemon.capabilities as string[]).includes(config.runtime)) {
+  const environment = config.environmentType ?? 'local';
+  const required = environment === 'cloud' ? [config.runtime, ...cloudCapabilities] : [config.runtime];
+  if (daemon.environment_type !== environment || !required.every(capability => (daemon.capabilities as string[]).includes(capability))) {
     throw new DomainError('PERMISSION_DENIED', 'daemon does not support the requested local runtime');
   }
+  if (environment === 'cloud') return;
   const withinScope = isAbsolute(config.workspacePath) && (daemon.workspace_roots as string[]).some(root => {
     if (!isAbsolute(root)) return false;
     const path = relative(root, config.workspacePath);

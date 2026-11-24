@@ -19,7 +19,7 @@ service DaemonGateway {
 
 message DaemonRegistration {
   string machine_name = 1;
-  // local / cloud；Phase 1 只执行 local，cloud 仅保留能力声明。
+  // local / cloud；cloud 还须具备 runtime 和四项云端能力。
   string environment_type = 2;
   repeated string capabilities = 3;
   repeated string workspace_roots = 4;
@@ -82,6 +82,10 @@ message ExecutionConfig {
   uint32 max_turns = 7;
   // 1..86400000 毫秒。
   uint32 timeout_ms = 8;
+  optional string base_url_ref = 9;
+  optional string environment_type = 10;
+  optional string snapshot_manifest_ref = 11;
+  optional string secret_lease_ref = 12;
 }
 
 message RunDispatch {
@@ -96,6 +100,23 @@ message RunDispatch {
   // 绑定 execution_job 的领取租约证明；不得写入公共事件或快照。
   string claim_token = 9;
   ExecutionCheckpoint checkpoint = 10;
+  CloudDispatch cloud = 11;
+}
+
+message CloudSnapshotManifest {
+  uint32 schema_version = 1;
+  string snapshot_id = 2;
+  string base_revision = 3;
+  string checksum = 4;
+  uint64 file_count = 5;
+  uint64 total_bytes = 6;
+}
+
+message CloudDispatch {
+  string execution_id = 1;
+  CloudSnapshotManifest snapshot = 2;
+  string secret_lease_id = 3;
+  string secret_lease_expires_at = 4;
 }
 
 message CheckpointMessage {

@@ -25,6 +25,17 @@ export type EventType =
   | 'artifact.created'
   | 'daemon.heartbeat'
   | 'daemon.disconnected'
+  | 'handoff.requested'
+  | 'handoff.created'
+  | 'handoff.completed'
+  | 'handoff.failed'
+  | 'container.creating'
+  | 'container.created'
+  | 'container.started'
+  | 'container.stopping'
+  | 'container.stopped'
+  | 'container.failed'
+  | 'cloud_execution.reconnecting'
   | 'audit.recorded';
 
 export type EventEnvelope<TPayload = unknown> = {

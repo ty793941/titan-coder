@@ -3,6 +3,9 @@ export type ExecutionConfig = {
   runtime: 'codex' | 'qwen';
   credentialRef: string;
   baseUrlRef?: string;
+  environmentType?: 'local' | 'cloud';
+  snapshotManifestRef?: string;
+  secretLeaseRef?: string;
   modelRef?: string;
   workspacePath: string;
   allowedTools: string[];
@@ -29,6 +32,12 @@ export type RunDispatch = {
   config: ExecutionConfig;
   claimToken: string;
   checkpoint?: ExecutionCheckpoint;
+  cloud?: { executionId: string; snapshot: CloudSnapshotManifest; secretLeaseId: string; secretLeaseExpiresAt: string };
+};
+
+export type CloudSnapshotManifest = {
+  schemaVersion: 1; snapshotId: string; baseRevision: string;
+  checksum: `sha256:${string}`; fileCount: number; totalBytes: number;
 };
 
 export type RunProgress = {

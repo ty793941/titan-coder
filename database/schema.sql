@@ -233,3 +233,57 @@ CREATE INDEX IF NOT EXISTS idx_execution_job_daemon_status ON execution_job(daem
 CREATE INDEX IF NOT EXISTS idx_checkpoint_run ON checkpoint(run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_uri_unique ON artifact(uri);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_reference_unique ON artifact(reference) WHERE reference IS NOT NULL;
+
+ALTER TABLE session ADD COLUMN IF NOT EXISTS environment_type TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT REFERENCES session(id);
+ALTER TABLE checkpoint ADD COLUMN IF NOT EXISTS source_checkpoint_id TEXT REFERENCES checkpoint(id);
+
+CREATE TABLE IF NOT EXISTS session_handoff (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES task(id),
+  source_session_id TEXT NOT NULL REFERENCES session(id),
+  source_run_id TEXT NOT NULL REFERENCES run(id),
+  source_daemon_id TEXT NOT NULL REFERENCES daemon(id),
+  target_session_id TEXT REFERENCES session(id),
+  checkpoint_id TEXT NOT NULL REFERENCES checkpoint(id),
+  workspace_sync TEXT NOT NULL CHECK (workspace_sync IN ('git-snapshot', 'git-patch')),
+  snapshot_manifest JSONB,
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'starting', 'completed', 'failed')),
+  requested_by TEXT NOT NULL,
+  error_code TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS secret_lease (
+  id TEXT PRIMARY KEY,
+  credential_ref TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS cloud_execution (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES session(id),
+  run_id TEXT NOT NULL UNIQUE REFERENCES run(id),
+  daemon_id TEXT NOT NULL REFERENCES daemon(id),
+  handoff_id TEXT REFERENCES session_handoff(id),
+  secret_lease_id TEXT NOT NULL REFERENCES secret_lease(id),
+  snapshot_manifest JSONB NOT NULL,
+  container_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'creating', 'starting', 'running', 'stopping', 'completed', 'failed', 'cancelled')),
+  attempt INTEGER NOT NULL,
+  lease_expires_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  error_code TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  UNIQUE(session_id, run_id, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_execution_daemon_status ON cloud_execution(daemon_id, status);
+CREATE INDEX IF NOT EXISTS idx_handoff_source_pending ON session_handoff(source_daemon_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_handoff_source_active ON session_handoff(source_session_id) WHERE status IN ('requested', 'starting');

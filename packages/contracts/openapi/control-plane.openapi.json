@@ -2,9 +2,9 @@
   "openapi": "3.1.0",
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
-    "title": "Titan Phase 1 Control Plane",
-    "version": "1.1.0",
-    "description": "按现有 NestJS Controller 与 Zod 冻结的 HTTP/JSON + SSE 契约，包含 pause 与创建新 Run 的 resume；不提供原进程或原生模型会话热恢复。ConnectRPC、跨环境 Handoff、Git Snapshot 传输仅冻结预留协议。认证覆盖以各操作 security 为准。"
+    "title": "Titan Control Plane",
+    "version": "1.2.0",
+    "description": "HTTP/JSON + SSE 契约，包含本机执行及有界云端Handoff控制面。Snapshot实际导出、Secret解析及容器执行由宿主Daemon负责，不提供原生模型进程热迁移。认证覆盖以各操作security为准。"
   },
   "servers": [
     {
@@ -17,12 +17,11 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-23T13:00:36.452Z"
+    "generatedAt": "2026-11-24T01:32:55.412Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
-    "SessionHandoff",
-    "GitSnapshotTransfer"
+    "RemoteGitSnapshotTransfer"
   ],
   "paths": {
     "/api/projects": {
@@ -503,7 +502,7 @@
       "post": {
         "operationId": "pauseRun",
         "summary": "暂停 Run 并请求停止执行",
-        "description": "同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。",
+        "description": "同步将非终态 Run/Session 标记 paused，已有 execution_job 标记 paused 与 cancelRequested=true，保留持久检查点并产生 run.paused 事件。重复暂停返回同一 Run；completed/failed/cancelled 返回 400 INVALID_STATE_TRANSITION。Daemon 通过 control 轮询停止进程，200 不证明进程已经退出；不是原生模型会话热暂停。 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。",
         "security": [],
         "parameters": [
           {
@@ -533,6 +532,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
           },
@@ -542,14 +544,19 @@
           "500": {
             "$ref": "#/components/responses/Error"
           }
-        }
+        },
+        "x-cloud-security": [
+          {
+            "ConsoleBearer": []
+          }
+        ]
       }
     },
     "/api/runs/{runId}/resume": {
       "post": {
         "operationId": "resumeRun",
         "summary": "从 paused Run 创建新尝试",
-        "description": "源 Run 必须 paused；同一 Session 创建新 Run，attempt 递增并置 queued，源 Run 保持 paused。Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少满足一处，作用域为 run:{runId}:resume；同键同正文重放仍返回 201。checkpointId 可指定同一 Session 的检查点，省略时选源 Run 最新检查点，没有则创建无检查点的新尝试。planHash 可省略但不能绕过 Session 绑定及最新已批准 Plan 校验；已有 queued/starting/running/waiting_input Run 返回 409 VERSION_CONFLICT。按 Session execution 配置重新排队，不恢复原进程或原生模型会话。",
+        "description": "源 Run 必须 paused；同一 Session 创建新 Run，attempt 递增并置 queued，源 Run 保持 paused。Idempotency-Key 请求头覆盖正文 idempotencyKey，二者至少满足一处，作用域为 run:{runId}:resume；同键同正文重放仍返回 201。checkpointId 可指定同一 Session 的检查点，省略时选源 Run 最新检查点，没有则创建无检查点的新尝试。planHash 可省略但不能绕过 Session 绑定及最新已批准 Plan 校验；已有 queued/starting/running/waiting_input Run 返回 409 VERSION_CONFLICT。按 Session execution 配置重新排队，不恢复原进程或原生模型会话。 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。",
         "security": [],
         "parameters": [
           {
@@ -592,6 +599,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
           },
@@ -609,7 +619,12 @@
           "sourceRunStatus": "paused",
           "nativeHotResume": false,
           "checkpointFallback": "latest-on-source-run"
-        }
+        },
+        "x-cloud-security": [
+          {
+            "ConsoleBearer": []
+          }
+        ]
       }
     },
     "/api/runs/{runId}/fail": {
@@ -710,7 +725,7 @@
       "post": {
         "operationId": "cancelRun",
         "summary": "请求取消 Run",
-        "description": "同步记录 cancelled 与 cancelRequested，Daemon 轮询 control 后终止进程。已终态 Run 原样返回；响应不证明操作系统进程已经退出。",
+        "description": "同步记录 cancelled 与 cancelRequested，Daemon 轮询 control 后终止进程。已终态 Run 原样返回；响应不证明操作系统进程已经退出。 对cloud Session的调用额外要求Console Bearer；local行为保持兼容。cloud不允许通过resume自动重新执行，必须人工处理后发起新的授权交接。",
         "security": [],
         "parameters": [
           {
@@ -740,6 +755,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
           },
@@ -749,7 +767,12 @@
           "500": {
             "$ref": "#/components/responses/Error"
           }
-        }
+        },
+        "x-cloud-security": [
+          {
+            "ConsoleBearer": []
+          }
+        ]
       }
     },
     "/api/tasks/{taskId}/artifacts": {
@@ -1179,7 +1202,7 @@
       "post": {
         "operationId": "registerDaemon",
         "summary": "注册 Daemon",
-        "description": "本机开发入口当前不要求 Bearer；每次调用创建新 daemonId 与令牌，不支持 Idempotency-Key 去重。cloud 仅允许能力声明，执行策略拒绝 cloud 作业。",
+        "description": "本机开发入口当前不要求 Bearer；每次调用创建新 daemonId 与令牌，不支持 Idempotency-Key 去重。cloud 执行要求 runtime 及四项云端能力、ready 心跳和容量。",
         "security": [],
         "parameters": [
           {
@@ -1589,7 +1612,7 @@
       "post": {
         "operationId": "reportRunProgress",
         "summary": "上报 Run 进度与检查点",
-        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。",
+        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。",
         "security": [
           {
             "DaemonBearer": []
@@ -1664,7 +1687,7 @@
       "get": {
         "operationId": "getRunControl",
         "summary": "轮询取消或暂停停止信号与 Run 状态",
-        "description": "暂停复用 cancelRequested=true 并返回 status=paused，请求 Daemon 停止进程。ready Daemon 对有效 claimed 作业的轮询会续租 120s；paused 作业不续租。resume 通过用户侧 REST 创建新 Run，不在此轮询中热恢复。",
+        "description": "暂停复用 cancelRequested=true 并返回 status=paused，请求 Daemon 停止进程。ready Daemon 对有效 claimed 作业的轮询会续租 120s；paused 作业不续租。resume 通过用户侧 REST 创建新 Run，不在此轮询中热恢复。 cloud同时续期job和cloud_execution的120秒租约；任一过期或Daemon失联则隔离为blocked并持久标记reconnecting，停止信号为true。Secret Lease固定有效期不续期。",
         "security": [
           {
             "DaemonBearer": []
@@ -1789,6 +1812,474 @@
           }
         }
       }
+    },
+    "/api/sessions/{id}/handoff": {
+      "post": {
+        "operationId": "requestHandoff",
+        "summary": "请求本机到云端交接",
+        "description": "Console Bearer 认证后以 local-user 记账。源 Session 与 checkpoint 所属 Run 必须 paused，checkpoint 必须为源 Run 当前检查点。仅创建 requested，不访问文件、不创建目标 Session。同键同请求返回原响应，异正文 409；请求头 Idempotency-Key 优先。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "幂等重放。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "新 requested Handoff。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/handoffs/{id}": {
+      "get": {
+        "operationId": "getHandoff",
+        "summary": "查询交接事实",
+        "description": "查询交接事实",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "交接与清单元数据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{id}/handoffs/pending": {
+      "get": {
+        "operationId": "pendingHandoffs",
+        "summary": "领取源 Daemon 待导出交接",
+        "description": "仅返回当前认证源 Daemon 的 requested，最多100条；workspacePath 来自已授权源 Session，baseRevision 可省略。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "待导出的请求。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingHandoffs"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{id}/handoffs/{handoffId}/snapshot": {
+      "post": {
+        "operationId": "acknowledgeHandoffSnapshot",
+        "summary": "确认停止并登记 Snapshot 清单",
+        "description": "stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "handoffId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffSnapshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "starting Handoff 或相同清单重放。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/daemons/{id}/runs/{runId}/cloud": {
+      "post": {
+        "operationId": "reportCloudLifecycle",
+        "summary": "上报独立容器生命周期与消费租约",
+        "description": "校验 Daemon Bearer、job归属、claimToken、双执行租约及状态转移。consumeSecret:true 以CAS单次消费Secret Lease，重复409，不返回Secret。生命周期不修改Run状态，不占用RunProgress.sequence。容器ID首次登记后不可改变。",
+        "security": [
+          {
+            "DaemonBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudLifecycleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "生命周期及消费确认。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudLifecycleAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/cloud-executions/{id}": {
+      "get": {
+        "operationId": "getCloudExecution",
+        "summary": "查询云端执行并核对失联事实",
+        "description": "观察到失联或租约过期时将claimed作业隔离为blocked、Session/Run标记reconnecting、撤销凭证租约，保留容器最后已知状态；不会自动重执行。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "不含凭证或claimToken的执行事实。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudExecution"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/cloud-executions/{id}/cancel": {
+      "post": {
+        "operationId": "cancelCloudExecution",
+        "summary": "幂等取消云端执行",
+        "description": "Console Bearer；正文为空或仅idempotencyKey，请求头可提供Idempotency-Key。以终态天然幂等，在同一事务更新Run/Session/job/cloud/Handoff、撤销Secret Lease并写Outbox。响应不证明容器已经停止。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/ArtifactIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudCancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "当前云端执行事实。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudExecution"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": false
+      }
     }
   },
   "components": {
@@ -1802,7 +2293,7 @@
       "ConsoleBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Authorization: Bearer <TITAN_CONSOLE_TOKEN>；仅用于新增控制台状态与工件正文接口。由本机服务端环境配置，未设置时拒绝访问；不是模型 API Key。"
+        "description": "Authorization: Bearer <TITAN_CONSOLE_TOKEN>；用于控制台、工件正文、Handoff和Cloud管理。由本机服务端环境配置，未设置时拒绝访问；不是模型API Key。"
       }
     },
     "parameters": {
@@ -2049,6 +2540,21 @@
             "minLength": 1,
             "maxLength": 200
           },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "snapshotManifestRef": {
+            "type": "string",
+            "pattern": "^snapshot:\\/\\/[A-Za-z0-9_-]{1,200}$"
+          },
+          "secretLeaseRef": {
+            "type": "string",
+            "pattern": "^lease:\\/\\/[A-Za-z0-9_-]{1,200}$"
+          },
           "modelRef": {
             "type": "string",
             "x-trim": true,
@@ -2091,7 +2597,208 @@
           "timeoutMs"
         ],
         "additionalProperties": false,
-        "description": "只支持 ready 的 local Daemon，runtime 必须在 capabilities 中；workspacePath 必须为绝对路径且位于已注册 workspaceRoots 内。"
+        "description": "environmentType 省略按 local 处理，保留 baseUrlRef。local 工作区须位于 Daemon 注册根目录；cloud 仅由 Handoff 创建，使用 /workspace/session 虚拟路径与 snapshot://、lease:// 引用，要求 runtime 及 cloud-session/container/snapshot-transfer/secret-lease 能力。条件通过 validateExecutionConfig 检查，基础 Schema 保留 ZodObject。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "environmentType": {
+                  "const": "cloud"
+                }
+              },
+              "required": [
+                "environmentType"
+              ]
+            },
+            "then": {
+              "required": [
+                "snapshotManifestRef",
+                "secretLeaseRef"
+              ],
+              "properties": {
+                "workspacePath": {
+                  "const": "/workspace/session"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CloudSnapshotManifest": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "snapshotId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,200}$"
+          },
+          "baseRevision": {
+            "type": "string",
+            "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "fileCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "totalBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 536870912
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "snapshotId",
+          "baseRevision",
+          "checksum",
+          "fileCount",
+          "totalBytes"
+        ],
+        "additionalProperties": false
+      },
+      "HandoffCreateRequest": {
+        "type": "object",
+        "properties": {
+          "checkpointId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "targetEnvironment": {
+            "type": "string",
+            "const": "cloud"
+          },
+          "workspaceSync": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "git-snapshot",
+                  "git-patch"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "checkpointId",
+          "targetEnvironment",
+          "workspaceSync"
+        ],
+        "additionalProperties": false
+      },
+      "HandoffSnapshotRequest": {
+        "type": "object",
+        "properties": {
+          "manifest": {
+            "type": "object",
+            "properties": {
+              "schemaVersion": {
+                "type": "number",
+                "const": 1
+              },
+              "snapshotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,200}$"
+              },
+              "baseRevision": {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              "checksum": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "fileCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "totalBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 536870912
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "snapshotId",
+              "baseRevision",
+              "checksum",
+              "fileCount",
+              "totalBytes"
+            ],
+            "additionalProperties": false
+          },
+          "stopped": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "manifest",
+          "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "CloudLifecycleRequest": {
+        "type": "object",
+        "properties": {
+          "claimToken": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "creating",
+              "starting",
+              "running",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "containerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"
+          },
+          "errorCode": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$"
+          },
+          "consumeSecret": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "claimToken",
+          "status"
+        ],
+        "additionalProperties": false
       },
       "ExecutionCheckpoint": {
         "type": "object",
@@ -2877,6 +3584,18 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "parentSessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": [
@@ -3087,6 +3806,9 @@
           },
           "checkpoint": {
             "$ref": "#/components/schemas/ExecutionCheckpoint"
+          },
+          "cloud": {
+            "$ref": "#/components/schemas/CloudDispatch"
           }
         },
         "required": [
@@ -3353,6 +4075,12 @@
               "RUNTIME_ADAPTER_UNAVAILABLE",
               "EVENT_SEQUENCE_GAP",
               "EXECUTION_LEASE_EXPIRED",
+              "CLOUD_SECRET_LEASE_EXPIRED",
+              "CLOUD_SECRET_CONSUMED",
+              "CLOUD_WORKER_DISCONNECTED",
+              "CLOUD_RUNTIME_WAITING_INPUT",
+              "HANDOFF_CHECKPOINT_INVALID",
+              "HANDOFF_TARGET_UNAVAILABLE",
               "INTERNAL_ERROR"
             ]
           },
@@ -3408,6 +4136,356 @@
         ],
         "additionalProperties": false
       },
+      "CloudDispatch": {
+        "type": "object",
+        "properties": {
+          "executionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/CloudSnapshotManifest"
+          },
+          "secretLeaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "secretLeaseExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "executionId",
+          "snapshot",
+          "secretLeaseId",
+          "secretLeaseExpiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "CloudLifecycleAck": {
+        "type": "object",
+        "properties": {
+          "executionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "creating",
+              "starting",
+              "running",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "secretConsumed": {
+            "type": "boolean"
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "executionId",
+          "status",
+          "secretConsumed",
+          "leaseExpiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "Handoff": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceSessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceRunId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "targetSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checkpointId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "starting",
+              "completed",
+              "failed"
+            ]
+          },
+          "requestedBy": {
+            "type": "string",
+            "const": "local-user"
+          },
+          "workspaceSync": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "git-snapshot",
+                  "git-patch"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CloudSnapshotManifest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "taskId",
+          "sourceSessionId",
+          "sourceRunId",
+          "targetSessionId",
+          "checkpointId",
+          "status",
+          "requestedBy",
+          "workspaceSync",
+          "manifest",
+          "errorCode",
+          "createdAt",
+          "completedAt",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "PendingHandoffs": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "sourceSessionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "sourceRunId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "checkpointId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "workspacePath": {
+                  "type": "string"
+                },
+                "baseRevision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "sourceSessionId",
+                "sourceRunId",
+                "checkpointId",
+                "workspacePath"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "additionalProperties": false
+      },
+      "CloudExecution": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "daemonId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "handoffId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "creating",
+              "starting",
+              "running",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "containerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leaseExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastHeartbeatAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "runId",
+          "daemonId",
+          "handoffId",
+          "status",
+          "containerId",
+          "attempt",
+          "errorCode",
+          "leaseExpiresAt",
+          "lastHeartbeatAt",
+          "createdAt",
+          "endedAt",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "CloudCancelRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
       "ConsoleExecutionConfig": {
         "type": "object",
         "properties": {
@@ -3429,6 +4507,21 @@
             "x-trim": true,
             "minLength": 1,
             "maxLength": 200
+          },
+          "environmentType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "cloud"
+            ]
+          },
+          "snapshotManifestRef": {
+            "type": "string",
+            "pattern": "^snapshot:\\/\\/[A-Za-z0-9_-]{1,200}$"
+          },
+          "secretLeaseRef": {
+            "type": "string",
+            "pattern": "^lease:\\/\\/[A-Za-z0-9_-]{1,200}$"
           },
           "modelRef": {
             "type": "string",

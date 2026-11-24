@@ -75,6 +75,10 @@ describe('Phase 1 OpenAPI freeze', () => {
     ['SessionCreateRequest', contracts.sessionCreateRequestSchema.partial({ idempotencyKey: true })],
     ['RunCreateRequest', contracts.runCreateRequestSchema.partial({ idempotencyKey: true })],
     ['ExecutionConfig', contracts.executionConfigSchema],
+    ['CloudSnapshotManifest', contracts.cloudSnapshotManifestSchema],
+    ['HandoffCreateRequest', contracts.handoffCreateRequestSchema.partial({ idempotencyKey: true })],
+    ['HandoffSnapshotRequest', contracts.handoffSnapshotRequestSchema],
+    ['CloudLifecycleRequest', contracts.cloudLifecycleRequestSchema],
     ['ExecutionCheckpoint', contracts.executionCheckpointSchema],
     ['DaemonRegistration', contracts.daemonRegistrationSchema],
     ['DaemonEventRequest', contracts.daemonEventSchema],
@@ -214,8 +218,20 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(api.components.schemas.ApiError.required).toEqual(['code', 'message', 'details', 'traceId', 'retryable', 'occurredAt']);
     expect(api.components.schemas.ApiError.properties.code.enum).toEqual([...errorCodes, 'INTERNAL_ERROR']);
     expect(api.components.securitySchemes.DaemonBearer).toMatchObject({ type: 'http', scheme: 'bearer' });
-    expect(api['x-reserved-only']).toEqual(['ConnectRPC', 'SessionHandoff', 'GitSnapshotTransfer']);
+    expect(api['x-reserved-only']).toEqual(['ConnectRPC', 'RemoteGitSnapshotTransfer']);
     expect(api.components.schemas.StageRequest).toMatchObject({ additionalProperties: false, required: ['stage', 'expectedVersion'] });
     expect(api.components.schemas.StageRequest.properties.expectedVersion).toMatchObject({ type: 'integer', exclusiveMinimum: 0, maximum: 2147483646 });
+  });
+
+  it('freezes bounded cloud dispatch and keeps lifecycle separate from seven run progress types', () => {
+    const api = load();
+    const schemas = api.components.schemas;
+    expect(schemas.RunDispatch.properties.cloud).toEqual(ref('CloudDispatch'));
+    expect(schemas.CloudDispatch.required).toEqual(['executionId', 'snapshot', 'secretLeaseId', 'secretLeaseExpiresAt']);
+    expect(schemas.CloudSnapshotManifest.additionalProperties).toBe(false);
+    expect(schemas.RunProgress.properties.type.enum).toEqual(['running', 'output', 'checkpoint', 'completed', 'failed', 'cancelled', 'waiting_input']);
+    expect(api.paths['/api/sessions/{id}/handoff'].post.security).toEqual([{ ConsoleBearer: [] }]);
+    expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.security).toEqual([{ DaemonBearer: [] }]);
+    expect(api.paths['/api/daemons/{id}/runs/{runId}/cloud'].post.requestBody.content['application/json'].schema).toEqual(ref('CloudLifecycleRequest'));
   });
 });

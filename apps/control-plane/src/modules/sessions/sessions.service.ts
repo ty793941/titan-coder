@@ -29,6 +29,7 @@ export class SessionsService {
       if (parsed.execution && !parsed.planHash) throw new DomainError('PLAN_HASH_STALE', 'execution requires an approved plan');
       if (parsed.planHash) await latestApprovedPlan(trx, taskId, parsed.planHash);
       if (parsed.execution) {
+        if (parsed.execution.environmentType === 'cloud') throw new DomainError('INVALID_STATE_TRANSITION', 'cloud sessions are created through authenticated handoff');
         if (parsed.daemonId && parsed.daemonId !== parsed.execution.daemonId) throw new DomainError('VALIDATION_FAILED', 'daemonId must match execution.daemonId');
         await validateExecution(trx, parsed.execution);
       }
@@ -63,6 +64,8 @@ export class SessionsService {
       id: row.id as Session['id'], taskId: row.task_id as Session['taskId'], status: row.status as Session['status'],
       entryAgent: row.entry_agent as 'project-manager',
       ...(row.plan_hash ? { planHash: row.plan_hash } : {}), createdAt: row.created_at.toISOString(),
+      ...(row.environment_type === 'cloud' ? { environmentType: 'cloud' as const } : {}),
+      ...(row.parent_session_id ? { parentSessionId: row.parent_session_id as Session['id'] } : {}),
     };
   }
 }

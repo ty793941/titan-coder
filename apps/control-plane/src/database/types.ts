@@ -41,6 +41,8 @@ export interface SessionTable {
   goal: Generated<string | null>;
   version: number;
   created_at: Date;
+  environment_type: Generated<string>;
+  parent_session_id: Generated<string | null>;
 }
 
 export interface RunTable {
@@ -143,6 +145,7 @@ export interface CheckpointTable {
   sequence: number;
   snapshot: JsonValue;
   created_at: Generated<Date>;
+  source_checkpoint_id: Generated<string | null>;
 }
 
 export interface ExecutionProgressTable {
@@ -214,4 +217,24 @@ export interface Database {
   tool_call: ToolCallTable;
   hook_execution: HookExecutionTable;
   audit_log: AuditLogTable;
+  session_handoff: SessionHandoffTable;
+  cloud_execution: CloudExecutionTable;
+  secret_lease: SecretLeaseTable;
+}
+
+export interface SessionHandoffTable {
+  id: string; task_id: string; source_session_id: string; source_run_id: string; source_daemon_id: string;
+  target_session_id: Generated<string | null>; checkpoint_id: string; workspace_sync: string;
+  snapshot_manifest: Generated<JsonValue>; status: Generated<string>; requested_by: string;
+  error_code: Generated<string | null>; version: Generated<number>; created_at: Generated<Date>; completed_at: Generated<Date | null>;
+}
+export interface SecretLeaseTable {
+  id: string; credential_ref: string; purpose: string; session_id: string; expires_at: Date;
+  consumed_at: Generated<Date | null>; revoked_at: Generated<Date | null>; created_at: Generated<Date>;
+}
+export interface CloudExecutionTable {
+  id: string; session_id: string; run_id: string; daemon_id: string; handoff_id: Generated<string | null>;
+  secret_lease_id: string; snapshot_manifest: JsonValue; container_id: Generated<string | null>;
+  status: Generated<string>; attempt: number; lease_expires_at: Generated<Date | null>; last_heartbeat_at: Generated<Date | null>;
+  error_code: Generated<string | null>; version: Generated<number>; created_at: Generated<Date>; ended_at: Generated<Date | null>;
 }

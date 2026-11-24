@@ -23,3 +23,5 @@ ON CONFLICT (id) DO NOTHING;
 -- execution_job 和 checkpoint 仅由执行事务创建，不初始化伪任务或凭证。
 -- 旧 Daemon 无令牌摘要，需重新注册领取一次性令牌，不回填明文密钥。
 -- Artifact 的 reference 和 metadata 由 schema.sql 提供，运行时写入时必须保持 URI 与元数据不可变。
+-- 云端执行、Handoff 和短期 Secret Lease 仅由认证事务创建，不初始化凭证或伪租约。
+-- 旧 Session 默认为 local，checkpoint.source_checkpoint_id 仅在跨环境导入时设置。

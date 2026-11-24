@@ -40,11 +40,46 @@ export const executionConfigSchema = z.object({
   runtime: z.enum(['codex', 'qwen']),
   credentialRef: identifier,
   baseUrlRef: identifier.optional(),
+  environmentType: z.enum(['local', 'cloud']).optional(),
+  snapshotManifestRef: z.string().regex(/^snapshot:\/\/[A-Za-z0-9_-]{1,200}$/).optional(),
+  secretLeaseRef: z.string().regex(/^lease:\/\/[A-Za-z0-9_-]{1,200}$/).optional(),
   modelRef: identifier.optional(),
   workspacePath: z.string().min(1).max(4096),
   allowedTools: z.array(identifier).max(100),
   maxTurns: z.number().int().positive().max(10000),
   timeoutMs: z.number().int().positive().max(86400000),
+}).strict();
+
+export function validateExecutionConfig(input: unknown): z.infer<typeof executionConfigSchema> {
+  const config = executionConfigSchema.parse(input);
+  if (config.environmentType === 'cloud') {
+    if (!config.snapshotManifestRef || !config.secretLeaseRef || config.workspacePath !== '/workspace/session') {
+      throw new z.ZodError([{ code: z.ZodIssueCode.custom, path: ['environmentType'], message: 'cloud requires snapshot and lease references and /workspace/session' }]);
+    }
+    const reference = /^(?:keychain|broker|secret):\/\/[A-Za-z0-9._/-]+$/;
+    if (!reference.test(config.credentialRef) || (config.baseUrlRef && !reference.test(config.baseUrlRef))) {
+      throw new z.ZodError([{ code: z.ZodIssueCode.custom, path: ['credentialRef'], message: 'cloud credentials must be secure references' }]);
+    }
+  }
+  return config;
+}
+
+export const cloudSnapshotManifestSchema = z.object({
+  schemaVersion: z.literal(1), snapshotId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
+  baseRevision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), checksum: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  fileCount: z.number().int().nonnegative().max(100000), totalBytes: z.number().int().nonnegative().max(512 * 1024 * 1024),
+}).strict();
+export type CloudSnapshotManifest = z.infer<typeof cloudSnapshotManifestSchema>;
+export const handoffCreateRequestSchema = z.object({
+  checkpointId: identifier, targetEnvironment: z.literal('cloud'),
+  workspaceSync: z.object({ mode: z.enum(['git-snapshot', 'git-patch']) }).strict(), idempotencyKey,
+}).strict();
+export const handoffSnapshotRequestSchema = z.object({ manifest: cloudSnapshotManifestSchema, stopped: z.literal(true) }).strict();
+export const cloudExecutionStatusSchema = z.enum(['queued', 'creating', 'starting', 'running', 'stopping', 'completed', 'failed', 'cancelled']);
+export const cloudLifecycleRequestSchema = z.object({
+  claimToken: identifier, status: z.enum(['creating', 'starting', 'running', 'stopping', 'completed', 'failed', 'cancelled']),
+  containerId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/).optional(),
+  errorCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/).optional(), consumeSecret: z.boolean().optional(),
 }).strict();
 
 export const executionCheckpointSchema = z.object({

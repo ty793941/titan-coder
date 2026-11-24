@@ -18,10 +18,14 @@ import { DaemonsService } from './modules/daemons/daemons.service.js';
 import { ExecutionService } from './modules/daemons/execution.service.js';
 import { ConsoleController } from './modules/console/console.controller.js';
 import { ConsoleService } from './modules/console/console.service.js';
+import { HandoffsController } from './modules/handoffs/handoffs.controller.js';
+import { HandoffsService } from './modules/handoffs/handoffs.service.js';
+import { CloudExecutionsController } from './modules/cloud-executions/cloud-executions.controller.js';
+import { CloudExecutionsService } from './modules/cloud-executions/cloud-executions.service.js';
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService],
 })
 export class AppModule {}
