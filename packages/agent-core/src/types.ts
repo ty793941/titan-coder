@@ -97,6 +97,7 @@ export type AgentRunInput = {
   runtime?: 'codex' | 'qwen';
   credentialRef?: string;
   modelRef?: string;
+  baseUrl?: string;
   workspacePath?: string;
   allowedTools?: string[];
   timeoutMs?: number;

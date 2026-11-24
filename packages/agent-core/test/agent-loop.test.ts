@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RuntimeSessionConfig } from '../src/adapters/runtime-adapter.js';
 import { AgentLoop } from '../src/agent-loop.js';
 import { CheckpointStore } from '../src/checkpoints.js';
 import { GoalGate } from '../src/goal-gate.js';
@@ -8,6 +9,20 @@ import { ToolRegistry } from '../src/tool-registry.js';
 import { FakeAdapter } from '../src/adapters/fake-adapter.js';
 
 describe('AgentLoop', () => {
+  it('passes a custom provider baseUrl to the native session', async () => {
+    let received: RuntimeSessionConfig | undefined;
+    const adapter = new FakeAdapter([{ type: 'completed' }]);
+    adapter.createSession = async config => { received = config; return { id: 'fixture', runtime: config.runtime }; };
+    const loop = new AgentLoop({
+      adapter,
+      tools: new ToolRegistry({ permission: new PermissionEngine([]), hooks: new HookRunner([]) }),
+      checkpoints: new CheckpointStore(),
+      goalGate: new GoalGate(),
+    });
+    await loop.run({ runId: 'run-url', goal: 'verify provider config', baseUrl: 'https://fixture.example/v1' });
+    expect(received?.baseUrl).toBe('https://fixture.example/v1');
+  });
+
   it('does not stop merely because the adapter emitted no tool call', async () => {
     const adapter = new FakeAdapter([{ type: 'text', text: '需要继续验证' }, { type: 'completed' }]);
     const loop = new AgentLoop({

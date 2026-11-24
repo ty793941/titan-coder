@@ -73,6 +73,15 @@ export function platformToolName(name: string): string {
   return name.replaceAll('_', '.');
 }
 
+function responsesProviderConfig(baseUrl: string): Record<string, unknown> {
+  return {
+    model_provider: 'titan',
+    model_providers: {
+      titan: { name: 'Titan Responses', base_url: baseUrl, wire_api: 'responses', requires_openai_auth: true },
+    },
+  };
+}
+
 export class CodexStdioTransport implements CodexTransport {
   private readonly sessions = new Map<string, SessionState>();
   constructor(private readonly options: CodexProviderOptions) {}
@@ -101,11 +110,10 @@ export class CodexStdioTransport implements CodexTransport {
         '-c', 'shell_environment_policy.inherit="none"',
         '-c', 'features.shell_tool=false',
         '-c', 'tools.view_image=false',
+        // Provider 身份在进程启动时固定，私有端点仅通过 Thread RPC 注入。
         ...(config.baseUrl ? [
-          '-c', `model_providers.titan.name=${JSON.stringify('Titan Responses')}`,
-          '-c', `model_providers.titan.base_url=${JSON.stringify(config.baseUrl)}`,
+          '-c', 'model_providers.titan.name="Titan Responses"',
           '-c', 'model_providers.titan.wire_api="responses"',
-          '-c', 'model_providers.titan.env_key="OPENAI_API_KEY"',
           '-c', 'model_providers.titan.requires_openai_auth=true',
           '-c', 'model_provider="titan"',
         ] : []),
@@ -136,6 +144,7 @@ export class CodexStdioTransport implements CodexTransport {
         approvalPolicy: 'never',
         // 恢复依赖 rollout；只写入当前子进程的临时目录，认证仍采用内存存储。
         ephemeral: false,
+        ...(config.baseUrl ? { config: responsesProviderConfig(config.baseUrl) } : {}),
         ...(config.workspace ? { runtimeWorkspaceRoots: [config.workspace] } : {}),
         ...(config.tools?.length ? { dynamicTools: config.tools.map(tool => ({ name: codexToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema })) } : {}),
       });
@@ -213,7 +222,10 @@ export class CodexStdioTransport implements CodexTransport {
     const state = this.get(session);
     if (!state.checkpoints.has(checkpoint.id)) throw new DomainError('CHECKPOINT_NOT_FOUND', 'Codex checkpoint is unknown or belongs to another session');
     if (!state.paused) throw providerError('Codex', 'session is not paused');
-    const result = await state.rpc.request('thread/resume', { threadId: state.threadId, cwd: state.config.cwd, model: state.config.modelRef ?? null, sandbox: 'read-only', approvalPolicy: 'never' });
+    const result = await state.rpc.request('thread/resume', {
+      threadId: state.threadId, cwd: state.config.cwd, model: state.config.modelRef ?? null, sandbox: 'read-only', approvalPolicy: 'never',
+      ...(state.config.baseUrl ? { config: responsesProviderConfig(state.config.baseUrl) } : {}),
+    });
     if (result?.thread?.id !== state.threadId) throw providerError('Codex', 'thread/resume returned a different thread');
     state.paused = false;
     state.checkpoints.delete(checkpoint.id);

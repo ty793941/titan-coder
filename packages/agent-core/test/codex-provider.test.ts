@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCodexApiKeyAdapter } from '../src/adapters/provider-adapters.js';
 import { codexToolName, platformToolName } from '../src/adapters/codex-stdio-transport.js';
+import { CodexStdioRpc } from '../src/adapters/codex-stdio-rpc.js';
 
 // 用真实子进程校验线路协议；不访问供应商，也不使用真实凭证。
 const serverScript = String.raw`
@@ -57,13 +60,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/start') {
     if (!loggedIn || p.approvalPolicy !== 'never' || p.sandbox !== 'read-only' || p.cwd !== process.cwd() || p.ephemeral !== false) return fail();
-    if (mode === 'custom-provider' && (!process.argv.includes('model_providers.titan.base_url="https://proxy.example/v1"') || !process.argv.includes('model_providers.titan.wire_api="responses"') || !process.argv.includes('model_provider="titan"'))) return fail();
+    if (mode === 'custom-provider' && (process.argv.some(arg => arg.includes('https://proxy.example/v1')) || p.config?.model_providers?.titan?.base_url !== 'https://proxy.example/v1' || !process.argv.includes('model_provider="titan"'))) return fail();
     thread = 'thread-' + process.pid;
     return ok({ thread: { id: thread } });
   }
   if (method === 'thread/resume') {
     if (p.threadId !== thread || p.sandbox !== 'read-only' || p.approvalPolicy !== 'never') return fail();
     if (mode === 'late-interrupt' && !interruptedFinished) return fail();
+    if (mode === 'custom-provider' && p.config?.model_providers?.titan?.base_url !== 'https://proxy.example/v1') return fail();
     return ok({ thread: { id: thread } });
   }
   if (method === 'turn/start') {
@@ -112,15 +116,75 @@ async function fixture(mode = 'normal', timeoutMs = 1000, baseUrl?: string) {
 }
 
 describe('Codex App Server stdio provider', () => {
+  it.runIf(process.env.TITAN_CODEX_BINARY)('routes native thread config to a local Responses endpoint without persisting its URL or key', async () => {
+    let observedRequest!: () => void;
+    const observed = new Promise<void>(resolve => { observedRequest = resolve; });
+    let requestPath: string | undefined;
+    let authorization: string | undefined;
+    const server = createServer((request, response) => {
+      requestPath = request.url;
+      authorization = request.headers.authorization;
+      request.resume();
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end('{"error":{"message":"fixture endpoint","type":"invalid_request_error"}}');
+      observedRequest();
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const home = await mkdtemp(join(tmpdir(), 'titan-codex-rpc-config-'));
+    const rpc = new CodexStdioRpc(process.env.TITAN_CODEX_BINARY!, [
+      'app-server', '--listen', 'stdio://', '-c', 'cli_auth_credentials_store="ephemeral"',
+      '-c', 'model_provider="titan"', '-c', 'model_providers.titan.name="Titan Responses"',
+      '-c', 'model_providers.titan.wire_api="responses"', '-c', 'model_providers.titan.requires_openai_auth=true',
+    ], process.cwd(), home, 5000, () => undefined, () => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await rpc.request('initialize', { clientInfo: { name: 'titan-config-probe', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      rpc.notify('initialized');
+      await rpc.request('account/login/start', { type: 'apiKey', apiKey: 'sk-titan-not-a-real-key' });
+      const started = await rpc.request('thread/start', {
+        cwd: process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', ephemeral: false, model: 'fixture-model',
+        config: {
+          model_provider: 'titan',
+          model_providers: { titan: { name: 'Titan Responses', base_url: baseUrl, wire_api: 'responses', requires_openai_auth: true } },
+        },
+      });
+      expect(started.modelProvider).toBe('titan');
+      await rpc.request('turn/start', { threadId: started.thread.id, input: [{ type: 'text', text: 'local fixture only', text_elements: [] }] });
+      await Promise.race([observed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('LOCAL_RESPONSES_NOT_REACHED')), 5000); })]);
+      expect(requestPath).toBe('/v1/responses');
+      expect(authorization).toBe('Bearer sk-titan-not-a-real-key');
+      await rpc.stop();
+      const files = await readdir(home, { recursive: true, withFileTypes: true });
+      for (const file of files.filter(file => file.isFile())) {
+        const content = await readFile(join(file.parentPath, file.name));
+        expect(content.includes(Buffer.from(baseUrl))).toBe(false);
+        expect(content.includes(Buffer.from('sk-titan-not-a-real-key'))).toBe(false);
+      }
+    } finally {
+      clearTimeout(timer);
+      await rpc.stop();
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15000);
+
   it('maps platform tool names to App Server safe names and back', () => {
     expect(codexToolName('artifact.write')).toBe('artifact_write');
     expect(platformToolName('artifact_write')).toBe('artifact.write');
     expect(codexToolName('workspace-read')).toBe('workspace-read');
   });
 
-  it('passes a custom Responses provider configuration to Codex App Server', async () => {
+  it('passes a custom Responses provider URL only through thread RPC, including resume', async () => {
     const { adapter, session } = await fixture('custom-provider', 1000, 'https://proxy.example/v1');
     expect(session.runtime).toBe('codex');
+    await adapter.sendInput(session, { text: 'custom provider' });
+    await Array.fromAsync(adapter.streamEvents(session));
+    const checkpoint = await adapter.pause(session);
+    await adapter.resume(session, checkpoint);
     await adapter.close(session);
   });
 
@@ -260,7 +324,12 @@ describe('Codex App Server stdio provider', () => {
 
   it.runIf(process.env.TITAN_CODEX_BINARY)('accepts ephemeral API-key login in the actual installed Codex without creating credential files', async () => {
     const home = await mkdtemp(join(tmpdir(), 'titan-codex-probe-'));
-    const child = spawn(process.env.TITAN_CODEX_BINARY!, ['app-server', '--listen', 'stdio://', '-c', 'cli_auth_credentials_store="ephemeral"'], { env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const config = { model_providers: { titan: { name: 'Titan Responses', base_url: 'http://127.0.0.1:1/v1', wire_api: 'responses', requires_openai_auth: true } } };
+    const child = spawn(process.env.TITAN_CODEX_BINARY!, [
+      'app-server', '--listen', 'stdio://', '-c', 'cli_auth_credentials_store="ephemeral"',
+      '-c', 'model_provider="titan"', '-c', 'model_providers.titan.name="Titan Responses"',
+      '-c', 'model_providers.titan.wire_api="responses"', '-c', 'model_providers.titan.requires_openai_auth=true',
+    ], { env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stderr.resume();
     let nextId = 0;
     const pending = new Map<number, (message: any) => void>();
@@ -279,10 +348,10 @@ describe('Codex App Server stdio provider', () => {
       expect(await request('initialize', { clientInfo: { name: 'titan-test', version: '0.1.0' }, capabilities: { experimentalApi: true } })).toHaveProperty('result');
       child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
       expect(await request('account/login/start', { type: 'apiKey', apiKey: 'sk-titan-not-a-real-key' })).toMatchObject({ result: { type: 'apiKey' } });
-      const started = await request('thread/start', { cwd: process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', ephemeral: false });
+      const started = await request('thread/start', { cwd: process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', ephemeral: false, model: 'fixture-model', config });
       expect(started).toHaveProperty('result.thread.id');
       expect(await request('thread/inject_items', { threadId: started.result.thread.id, items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'local protocol probe without inference' }] }] })).toHaveProperty('result');
-      expect(await request('thread/resume', { threadId: started.result.thread.id, cwd: process.cwd(), sandbox: 'read-only', approvalPolicy: 'never' })).toMatchObject({ result: { thread: { id: started.result.thread.id } } });
+      expect(await request('thread/resume', { threadId: started.result.thread.id, cwd: process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', model: 'fixture-model', config })).toMatchObject({ result: { thread: { id: started.result.thread.id } } });
       const files = await readdir(home, { recursive: true, withFileTypes: true });
       expect(files.some(file => file.name === 'auth.json')).toBe(false);
       for (const file of files.filter(file => file.isFile())) {

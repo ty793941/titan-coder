@@ -101,6 +101,7 @@ export class AgentLoop {
         runtime: input.runtime ?? 'qwen',
         credentialRef: input.credentialRef ?? 'runtime://test',
         ...(input.modelRef ? { modelRef: input.modelRef } : {}),
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
         ...(input.workspacePath ? { cwd: input.workspacePath, workspace: input.workspacePath } : {}),
         ...(this.options.toolSpecs?.length ? { tools: this.options.toolSpecs } : {}),
         ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),

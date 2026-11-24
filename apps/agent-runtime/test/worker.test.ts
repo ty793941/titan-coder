@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fork } from 'node:child_process';
 import { z } from 'zod';
 import type { RunDispatch, RunProgress } from '@titan/daemon-protocol';
 import type { NativeSession, RuntimeAdapter, RuntimeEvent, RuntimeInput, RuntimeSessionConfig } from '@titan/agent-core';
@@ -45,6 +46,56 @@ function dispatch(overrides: Partial<RunDispatch> = {}): RunDispatch {
 describe('Runtime worker', () => {
   const roots: string[] = [];
   afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+
+  it('preserves the compiled local IPC dispatch and disconnect lifecycle', async () => {
+    const child = fork(fileURLToPath(new URL('../dist/worker.js', import.meta.url)), [], {
+      env: { PATH: process.env.PATH ?? '' }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    const progress: RunProgress[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closed = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', resolve);
+      timer = setTimeout(() => reject(new Error('LOCAL_IPC_WORKER_TIMEOUT')), 3000);
+    });
+    child.on('message', message => {
+      const frame = message as { type: string; progress: RunProgress };
+      if (frame.type !== 'progress') return;
+      progress.push(frame.progress);
+      if (frame.progress.type === 'waiting_input') child.disconnect();
+    });
+    try {
+      child.send({ dispatch: dispatch({ config: { ...dispatch().config, credentialRef: 'broker://missing', workspacePath: '/workspace/session' } }) });
+      expect(await closed).toBe(0);
+      expect(progress.map(event => event.type)).toEqual(['running', 'waiting_input']);
+      expect(progress.map(event => event.sequence)).toEqual([1, 2]);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+  });
+
+  it('redacts raw and normalized provider URLs from progress and persisted checkpoints', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'titan-worker-url-')); roots.push(root);
+    const rawUrl = 'https://private-provider.example/v1/';
+    const normalizedUrl = rawUrl.slice(0, -1);
+    const adapter = new FixtureAdapter();
+    const originalEvents = adapter.streamEvents.bind(adapter);
+    adapter.streamEvents = async function* () {
+      yield { type: 'text', payload: `provider ${rawUrl} ${normalizedUrl}` };
+      yield* originalEvents();
+    };
+    const progress: RunProgress[] = [];
+    const value = await executeDispatch(dispatch({ config: { ...dispatch().config, workspacePath: root, baseUrlRef: 'broker://url' } }), {
+      adapterFactory: () => adapter,
+      credentialResolver: async ref => ref === 'broker://url' ? rawUrl : 'fixture-secret',
+      sendProgress: event => { progress.push(event); },
+    });
+    const stored = await readFile(join(root, '.titan', 'checkpoints', `${value.checkpoint!.id}.json`), 'utf8');
+    expect(JSON.stringify(progress)).not.toContain(normalizedUrl);
+    expect(stored).not.toContain(normalizedUrl);
+    expect(stored).toContain('[REDACTED]');
+  });
 
   it('forwards the real goal, emits sequence-one progress, writes an artifact checksum, and completes with evidence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'titan-worker-')); roots.push(root);

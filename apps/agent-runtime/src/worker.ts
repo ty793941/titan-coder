@@ -126,7 +126,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
   const credentialResolver = dependencies.credentialResolver ?? resolveCredential;
   const credential = await credentialResolver(dispatch.config.credentialRef);
   const baseUrl = dispatch.config.baseUrlRef ? await credentialResolver(dispatch.config.baseUrlRef) : undefined;
-  if (credential) secretValues = [credential];
+  secretValues = [credential, baseUrl].filter((value): value is string => Boolean(value));
   if (dependencies.signal?.aborted) {
     const result: AgentRunResult = { status: 'cancelled', replayedToolUseIds: [], evidence: [], error: 'run cancelled' };
     emit('cancelled', { status: 'cancelled', message: 'run cancelled' });
@@ -144,6 +144,7 @@ export async function executeDispatch(dispatch: RunDispatch, dependencies: Worke
     return result;
   }
   if (baseUrl) validatedBaseUrl = validateProviderBaseUrl(baseUrl);
+  if (validatedBaseUrl && !secretValues.includes(validatedBaseUrl)) secretValues.push(validatedBaseUrl);
   const runtimeConfig = dispatch.config as RuntimeConfigWithLocalPolicy;
   const configuredSkills = runtimeConfig.localPolicy?.enabledSkills ?? runtimeConfig.enabledSkills ?? [];
   if (!Array.isArray(configuredSkills) || configuredSkills.some(skill => typeof skill !== 'string')) {
