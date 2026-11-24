@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { DomainError, backgroundJobCreateRequestSchema, backgroundJobSchema, jobObservationSchema, orchestrationErrorCodeSchema, orchestrationPageSchema, type ErrorCode } from '@titan/contracts';
+import { DomainError, backgroundJobCreateRequestSchema, backgroundJobSchema, jobExecutionSchema, jobObservationSchema, orchestrationErrorCodeSchema, orchestrationPageSchema, type ErrorCode } from '@titan/contracts';
 import { sql, type Selectable, type Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
 import type { BackgroundJobTable, Database, ExecutionScheduleTable, SessionTable } from '../../database/types.js';
@@ -73,6 +73,28 @@ export class BackgroundJobsService {
     return jobObservationSchema.parse({ jobId: view.jobId, status: view.status, deadlineAt: view.deadlineAt, ...(view.runId ? { runId: view.runId } : {}), ...(view.errorCode ? { errorCode: view.errorCode } : {}) });
   }
 
+  async execution(id: string) {
+    const row = await this.database.db.selectFrom('background_job as job')
+      .innerJoin('session', 'session.id', 'job.session_id')
+      .innerJoin('task', 'task.id', 'session.task_id')
+      .leftJoin('run', 'run.id', 'job.run_id')
+      .leftJoin('execution_schedule as schedule', 'schedule.id', 'job.schedule_id')
+      .leftJoin('schedule_occurrence as occurrence', 'occurrence.job_id', 'job.id')
+      .select(['job.id', 'job.workflow_id', 'job.workflow_version'])
+      .where('job.id', '=', id).whereRef('job.task_id', '=', 'task.id').whereRef('job.project_id', '=', 'task.project_id')
+      .where(eb => eb.or([eb('job.run_id', 'is', null), eb('run.session_id', '=', eb.ref('session.id'))]))
+      .where(eb => eb.or([
+        eb.and([eb('job.schedule_id', 'is', null), eb('job.workflow_id', '=', `titan/background/${id}/v1`)]),
+        eb.and([
+          eb('schedule.session_id', '=', eb.ref('session.id')), eb('schedule.task_id', '=', eb.ref('task.id')),
+          eb('schedule.project_id', '=', eb.ref('task.project_id')), eb('occurrence.schedule_id', '=', eb.ref('schedule.id')),
+          eb('occurrence.definition_version', '=', eb.ref('job.definition_version')), eb('occurrence.occurrence_id', '=', eb.ref('job.workflow_id')),
+        ]),
+      ])).executeTakeFirst();
+    if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'background job execution was not found');
+    return jobExecutionSchema.parse({ jobId: row.id, workflowId: row.workflow_id, workflowVersion: row.workflow_version });
+  }
+
   async list(sessionId: string, query: unknown) {
     const page = orchestrationPageSchema.parse(query);
     if (!await this.database.db.selectFrom('session').select('id').where('id', '=', sessionId).executeTakeFirst()) throw new DomainError('RESOURCE_NOT_FOUND', 'session was not found');
@@ -130,7 +152,7 @@ export class BackgroundJobsService {
     try { await validateLocalSession(trx, session, schedule.plan_hash); }
     catch (error) {
       if (!(error instanceof DomainError)) throw error;
-      if (error.code === 'DAEMON_UNAVAILABLE') return error.code;
+      if (error.code === 'DAEMON_UNAVAILABLE') throw error;
       await trx.updateTable('execution_schedule').set({ enabled: false, sync_status: 'blocked', version: schedule.version + 1 }).where('id', '=', schedule.id).execute();
       await this.commands.enqueue(trx, 'sync_schedule', schedule.id, schedule.version + 1);
       await this.events.append(trx, { eventType: 'schedule.blocked', projectId: schedule.project_id, taskId: schedule.task_id, sessionId: schedule.session_id, actor: { type: 'system', id: 'control-plane' }, payload: { scheduleId: schedule.id, errorCode: error.code } });

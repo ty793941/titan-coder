@@ -17,6 +17,10 @@ export const jobObservationSchema = z.object({
   jobId: id, status: backgroundJobStatusSchema, deadlineAt: instant,
   runId: id.optional(), errorCode: orchestrationErrorCodeSchema.optional(),
 }).strict();
+export const jobExecutionSchema = z.object({
+  jobId: id, workflowId: z.string().min(1).max(500).regex(/^[A-Za-z0-9][A-Za-z0-9_/:.\-]*$/).refine(value => !value.includes('://'), 'workflow ID cannot be a URL'),
+  workflowVersion: z.literal(1),
+}).strict();
 export const backgroundJobSchema = jobObservationSchema.extend({
   projectId: id, taskId: id, sessionId: id, kind: z.enum(['run', 'observe']), planHash: hash,
   workflowId: z.string().min(1).max(500), workflowVersion: z.literal(1), cancelRequested: z.boolean(),
@@ -76,6 +80,7 @@ export const workflowRetryRequestSchema = z.object({ claimToken, retryable: z.bo
 export const workflowCancelRequestSchema = z.object({ reason: z.enum(['cancelled', 'expired']) }).strict();
 export const orchestrationEmptyRequestSchema = z.object({}).strict();
 export type JobObservation = z.infer<typeof jobObservationSchema>;
+export type JobExecution = z.infer<typeof jobExecutionSchema>;
 export type BackgroundJob = z.infer<typeof backgroundJobSchema>;
 export type Schedule = z.infer<typeof scheduleSchema>;
 export type WorkflowCommand = z.infer<typeof workflowCommandSchema>;

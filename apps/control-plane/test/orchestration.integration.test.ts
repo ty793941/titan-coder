@@ -290,10 +290,19 @@ it('keeps schedules enabled across transient daemon disconnection', async () => 
   await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
   await db.updateTable('daemon').set({ last_heartbeat_at: new Date(Date.now() - 40000) }).where('id', '=', f.daemon.daemonId).execute();
   const occurrence = { definitionVersion: 2, occurrenceId: `titan/disconnect/${randomUUID()}`, scheduledAt: new Date().toISOString() };
-  expect((await internal(`/schedules/${schedule.id}/occurrences`, occurrence)).body.status).toBe('skipped');
+  expect((await internal(`/schedules/${schedule.id}/occurrences`, occurrence)).body).toMatchObject({ code: 'DAEMON_UNAVAILABLE', retryable: true });
   expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ enabled: true, version: 2 });
   await db.updateTable('daemon').set({ last_heartbeat_at: new Date() }).where('id', '=', f.daemon.daemonId).execute();
-  expect((await internal(`/schedules/${schedule.id}/occurrences`, { ...occurrence, occurrenceId: `titan/recovered/${randomUUID()}`, scheduledAt: new Date().toISOString() })).body.status).toBe('created');
+  const recovered = await internal(`/schedules/${schedule.id}/occurrences`, occurrence);
+  expect(recovered.body.status).toBe('created');
+  await db.updateTable('daemon').set({ last_heartbeat_at: new Date(Date.now() - 40000) }).where('id', '=', f.daemon.daemonId).execute();
+  expect((await internal(`/jobs/${recovered.body.jobId}/dispatch`, {})).body).toMatchObject({ code: 'DAEMON_UNAVAILABLE', retryable: true });
+  expect((await internal(`/jobs/${recovered.body.jobId}`)).body.status).toBe('pending_dispatch');
+  expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ enabled: true, version: 2, runCount: 0 });
+  await db.updateTable('daemon').set({ last_heartbeat_at: new Date() }).where('id', '=', f.daemon.daemonId).execute();
+  const dispatched = await internal(`/jobs/${recovered.body.jobId}/dispatch`, {});
+  expect(dispatched.body.runId).toBeDefined();
+  expect((await request(`/schedules/${schedule.id}`)).body.runCount).toBe(1);
 });
 
 it('records workflow cancellation as the authenticated system identity', async () => {
@@ -355,4 +364,115 @@ it('serializes manual resume with existing-run control before locking the sessio
   expect((await internal(`/jobs/${job.jobId}/cancel`, { reason: 'cancelled' })).body.status).toBe('cancelled');
   expect((await request(`/sessions/${f.session.id}`)).body.status).toBe('queued');
   expect((await request(`/runs/${(await resume!).body.id}`)).body.status).toBe('queued');
+});
+
+it('replays only a completed ACK from the same worker and claim generation without resyncing', async () => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  const firstClaim = (await internal('/commands/claim', { workerId: 'worker_test' })).body;
+  await db.updateTable('workflow_command').set({ lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', firstClaim.id).execute();
+  const currentClaim = (await internal('/commands/claim', { workerId: 'worker_test' })).body;
+  const path = `/commands/${currentClaim.id}/complete`;
+  const body = { claimToken: currentClaim.claimToken };
+  expect((await internal(path, body)).status).toBe(204);
+  const completed = await db.selectFrom('workflow_command').selectAll().where('id', '=', currentClaim.id).executeTakeFirstOrThrow();
+  expect(completed).toMatchObject({ status: 'completed', lease_expires_at: null, worker_id: 'worker_test', attempts: 2 });
+  await db.updateTable('execution_schedule').set({ sync_status: 'pending_sync' }).where('id', '=', schedule.id).execute();
+  const replies = await Promise.all([internal(path, body), internal(path, body)]);
+  expect(replies.map(reply => reply.status)).toEqual([204, 204]);
+  expect(completed.claim_token_hash).toMatch(/^[a-f0-9]{64}$/);
+  expect(completed.claim_token_hash).not.toBe(body.claimToken);
+  expect(await db.selectFrom('workflow_command').selectAll().where('id', '=', currentClaim.id).executeTakeFirstOrThrow()).toEqual(completed);
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('pending_sync');
+  expect((await internal(path, { claimToken: firstClaim.claimToken })).status).toBe(409);
+  expect((await internal(path, { claimToken: 'b'.repeat(64) })).status).toBe(409);
+  expect((await internal(`/commands/${currentClaim.id}/retry`, { ...body, retryable: true, errorCode: 'WORKFLOW_COMMAND_FAILED' })).status).toBe(409);
+  const { WorkflowCommandsService } = await import('../dist/modules/orchestration/workflow-commands.service.js');
+  await expect(app.get(WorkflowCommandsService).acknowledge(currentClaim.id, body.claimToken, 'worker_other')).rejects.toThrow('WORKFLOW_COMMAND_LEASE_EXPIRED');
+});
+
+it('returns authenticated execution metadata for ordinary and occurrence workflows with resolved ownership', async () => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  const path = `/jobs/${job.jobId}/execution`;
+  for (const token of [null, consoleToken, f.daemon.authToken]) expect((await internal(path, undefined, token)).status).toBe(401);
+  expect((await internal(path)).body).toEqual({ jobId: job.jobId, workflowId: `titan/background/${job.jobId}/v1`, workflowVersion: 1 });
+  expect((await internal('/jobs/missing/execution')).status).toBe(404);
+  expect((await internal(`/jobs/${job.jobId}`)).body).not.toHaveProperty('workflowId');
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  const occurrence = { definitionVersion: 2, occurrenceId: `titan/occurrence/${randomUUID()}`, scheduledAt: new Date().toISOString() };
+  const scheduled = (await internal(`/schedules/${schedule.id}/occurrences`, occurrence)).body;
+  expect((await internal(`/jobs/${scheduled.jobId}/execution`)).body).toEqual({ jobId: scheduled.jobId, workflowId: occurrence.occurrenceId, workflowVersion: 1 });
+  await db.updateTable('schedule_occurrence').set({ occurrence_id: `titan/other/${randomUUID()}` }).where('job_id', '=', scheduled.jobId).execute();
+  expect((await internal(`/jobs/${scheduled.jobId}/execution`)).status).toBe(404);
+  const other = await fixture();
+  await db.updateTable('background_job').set({ task_id: other.task.id }).where('id', '=', job.jobId).execute();
+  expect((await internal(path)).status).toBe(404);
+});
+
+it('coalesces obsolete pending schedule commands and claims only the latest definition', async () => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  await request(`/schedules/${schedule.id}/pause`, { expectedVersion: 2 });
+  const claim = await internal('/commands/claim', { workerId: 'worker_test' });
+  expect(claim.body).toMatchObject({ kind: 'sync_schedule', targetId: schedule.id, definitionVersion: 3 });
+  const obsolete = await db.selectFrom('workflow_command').select(['status', 'error_code']).where('target_id', '=', schedule.id).where('definition_version', '<', 3).execute();
+  expect(obsolete).toEqual([{ status: 'completed', error_code: 'SCHEDULE_DEFINITION_SUPERSEDED' }, { status: 'completed', error_code: 'SCHEDULE_DEFINITION_SUPERSEDED' }]);
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('pending_sync');
+});
+
+it('serializes a schedule across dispatchers until ACK or lease expiry without starving other schedules', async () => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  const old = (await internal('/commands/claim', { workerId: 'worker_test' })).body;
+  expect(old.definitionVersion).toBe(1);
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  expect((await internal('/commands/claim', { workerId: 'worker_test' })).status).toBe(204);
+  const g = await fixture();
+  const other = (await request(`/sessions/${g.session.id}/schedules`, g.scheduleInput)).body;
+  const independent = (await internal('/commands/claim', { workerId: 'worker_test' })).body;
+  expect(independent.targetId).toBe(other.id);
+  await internal(`/commands/${independent.id}/complete`, { claimToken: independent.claimToken });
+  expect((await internal(`/commands/${old.id}/complete`, { claimToken: old.claimToken })).status).toBe(204);
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('pending_sync');
+  const claims = await Promise.all([internal('/commands/claim', { workerId: 'worker_test' }), internal('/commands/claim', { workerId: 'worker_test' })]);
+  expect(claims.map(reply => reply.status).sort()).toEqual([200, 204]);
+  const current = claims.find(reply => reply.status === 200)!.body;
+  expect(current).toMatchObject({ targetId: schedule.id, definitionVersion: 2 });
+  await request(`/schedules/${schedule.id}/pause`, { expectedVersion: 2 });
+  await db.updateTable('workflow_command').set({ lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', current.id).execute();
+  const recovered = (await internal('/commands/claim', { workerId: 'worker_test' })).body;
+  expect(recovered).toMatchObject({ targetId: schedule.id, definitionVersion: 3 });
+  expect((await internal(`/commands/${current.id}/complete`, { claimToken: current.claimToken })).status).toBe(409);
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('pending_sync');
+  await internal(`/commands/${recovered.id}/complete`, { claimToken: recovered.claimToken });
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('paused');
+});
+
+it.each(['obsolete', 'exhausted'])('skips locked %s cleanup rows instead of blocking command claims', async mode => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  const command = await db.selectFrom('workflow_command').select('id').where('target_id', '=', schedule.id).executeTakeFirstOrThrow();
+  if (mode === 'obsolete') await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  else await db.updateTable('workflow_command').set({ status: 'claimed', attempts: 10, lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', command.id).execute();
+  await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput);
+  let claim: ReturnType<typeof internal> | undefined;
+  let settled = false;
+  let returnedWhileLocked = false;
+  await db.transaction().execute(async trx => {
+    await trx.selectFrom('workflow_command').select('id').where('id', '=', command.id).forUpdate().execute();
+    claim = internal('/commands/claim', { workerId: 'worker_test' });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([claim.then(() => { settled = true; }), new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
+    returnedWhileLocked = settled;
+    clearTimeout(timer);
+  });
+  expect((await claim!).status).toBe(200);
+  expect(returnedWhileLocked).toBe(true);
 });

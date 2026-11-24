@@ -5,6 +5,15 @@ const job = { kind: 'run', runInBackground: true, planHash: `sha256:${'a'.repeat
 const schedule = { planHash: job.planHash, timezone: 'Asia/Shanghai', intervalSeconds: 60, startsAt: '2026-12-01T00:00:00.000Z', endsAt: '2026-12-02T00:00:00.000Z', maxRuns: 2, overlapPolicy: 'skip', enabled: false, idempotencyKey: 'schedule-1' };
 
 describe('strict persistent orchestration contracts', () => {
+  it('exports ID-only execution metadata without expanding observations', () => {
+    expect(contracts).toHaveProperty('jobExecutionSchema');
+    const metadata = { jobId: 'bg_1', workflowId: 'titan/occurrence/test-1', workflowVersion: 1 };
+    expect(contracts.jobExecutionSchema.parse(metadata)).toEqual(metadata);
+    for (const input of [{ ...metadata, workflowVersion: 2 }, { ...metadata, credentialRef: 'synthetic' }, { ...metadata, workflowId: 'https://secret.example' }]) {
+      expect(contracts.jobExecutionSchema.safeParse(input).success).toBe(false);
+    }
+    expect(contracts.jobObservationSchema.safeParse({ jobId: 'bg_1', status: 'running', deadlineAt: job.deadlineAt, workflowId: metadata.workflowId }).success).toBe(false);
+  });
   it('exports the background request and requires explicit authorization', () => {
     expect(contracts).toHaveProperty('backgroundJobCreateRequestSchema');
     expect(contracts.backgroundJobCreateRequestSchema.parse(job)).toEqual(job);

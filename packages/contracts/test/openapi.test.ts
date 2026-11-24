@@ -43,6 +43,10 @@ describe('Phase 1 OpenAPI freeze', () => {
   it('freezes strict background, schedule and independent workflow service contracts', () => {
     const api = load();
     expect(api.components.securitySchemes.WorkflowBearer).toMatchObject({ type: 'http', scheme: 'bearer' });
+    expect(api.paths['/api/internal/workflow/jobs/{id}/execution'].get.security).toEqual([{ WorkflowBearer: [] }]);
+    expect(api.paths['/api/internal/workflow/jobs/{id}/execution'].get.responses['200'].content['application/json'].schema).toEqual(ref('JobExecution'));
+    expect(api.components.schemas.JobExecution).toMatchObject({ additionalProperties: false, required: ['jobId', 'workflowId', 'workflowVersion'] });
+    expect(Object.keys(api.components.schemas.JobExecution.properties)).toEqual(['jobId', 'workflowId', 'workflowVersion']);
     for (const path of ['/api/internal/workflow/commands/claim', '/api/internal/workflow/jobs/{id}/dispatch', '/api/internal/workflow/jobs/{id}/cancel', '/api/internal/workflow/schedules/{id}/occurrences']) {
       expect(api.paths[path].post.security).toEqual([{ WorkflowBearer: [] }]);
       expect(api.paths[path].post.responses).toHaveProperty('401');

@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T09:36:54.671Z"
+    "generatedAt": "2026-11-24T13:49:34.676Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -3039,7 +3039,7 @@
       "post": {
         "operationId": "claimWorkflowCommand",
         "summary": "领取Workflow命令投递租约",
-        "description": "workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。",
+        "description": "workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。sync_schedule只领取当前definitionVersion，同Schedule有效租约串行互斥；尚未领取或租约过期的旧版本标记completed/errorCode=SCHEDULE_DEFINITION_SUPERSEDED，不推进syncStatus。有效旧租约结束前不领取新版。租约过期不能中断已发送的网络请求，Temporal更新仍需客户端按版本冲突令牌/单调版本进行fencing，禁止旧版本覆盖新版。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3099,7 +3099,7 @@
       "post": {
         "operationId": "completeWorkflowCommand",
         "summary": "确认当前投递租约",
-        "description": "仅同worker与当前未到期claimToken可ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。",
+        "description": "仅同worker与当前未到期claimToken可首次ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。成功完成后保留最后一代token摘要，相同worker和claimToken重放返回204且不重新推进同步状态；retry不能重放已完成ACK。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3244,6 +3244,62 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JobObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/internal/workflow/jobs/{id}/execution": {
+      "get": {
+        "operationId": "getWorkflowJobExecution",
+        "summary": "读取后台任务实际Workflow执行标识",
+        "description": "独立WorkflowBearer，仅返回数据库已授权任务的执行标识；服务端解析并核对Project/Task/Session、Run和occurrence归属，不接受客户端传入workflowId。未知资源或归属不一致404，Console/Daemon身份401。Dispatcher用于cancel实际Workflow，此GET不是Activity，不扩展JobObservation。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "三个必填安全标识字段。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobExecution"
                 }
               }
             }
@@ -5041,6 +5097,35 @@
         ],
         "additionalProperties": false,
         "description": "Temporal可接收的最小业务观察，严格字段白名单；errorCode仅允许固定平台错误码，禁止错误正文、Prompt、凭证、URL及Checkpoint。paused Run映射waiting_input；不会自动重执行或复用cloud租约。"
+      },
+      "JobExecution": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "workflowId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_/:.\\-]*$",
+            "x-validation": "opaque workflow identifier, never a URL (:// is forbidden)"
+          },
+          "workflowVersion": {
+            "type": "number",
+            "const": 1
+          }
+        },
+        "required": [
+          "jobId",
+          "workflowId",
+          "workflowVersion"
+        ],
+        "additionalProperties": false,
+        "description": "仅供Dispatcher读取的执行标识，不作为Activity返回值进入历史。严格只含jobId、workflowId、workflowVersion=1；核对Session/Task/Project、同Session Run和Schedule occurrence绑定。普通任务为titan/background/<jobId>/v1，调度任务返回持久化occurrenceId，不允许用jobId推导调度Workflow。"
       },
       "ScheduleCreateRequest": {
         "type": "object",

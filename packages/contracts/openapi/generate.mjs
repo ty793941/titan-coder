@@ -92,6 +92,7 @@ const schemas = Object.fromEntries(Object.entries({
   BackgroundJobCreateRequest: orchestration.backgroundJobCreateRequestSchema,
   BackgroundJob: orchestration.backgroundJobSchema,
   JobObservation: orchestration.jobObservationSchema,
+  JobExecution: orchestration.jobExecutionSchema,
   ScheduleCreateRequest: orchestration.scheduleCreateRequestSchema,
   ScheduleUpdateRequest: orchestration.scheduleUpdateRequestSchema,
   ScheduleVersionRequest: orchestration.scheduleVersionRequestSchema,
@@ -200,6 +201,8 @@ for (const name of ['ScheduleCreateRequest', 'ScheduleUpdateRequest', 'Schedule'
   schemas[name].description = 'cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。';
 }
 schemas.JobObservation.description = 'Temporal可接收的最小业务观察，严格字段白名单；errorCode仅允许固定平台错误码，禁止错误正文、Prompt、凭证、URL及Checkpoint。paused Run映射waiting_input；不会自动重执行或复用cloud租约。';
+schemas.JobExecution.description = '仅供Dispatcher读取的执行标识，不作为Activity返回值进入历史。严格只含jobId、workflowId、workflowVersion=1；核对Session/Task/Project、同Session Run和Schedule occurrence绑定。普通任务为titan/background/<jobId>/v1，调度任务返回持久化occurrenceId，不允许用jobId推导调度Workflow。';
+schemas.JobExecution.properties.workflowId['x-validation'] = 'opaque workflow identifier, never a URL (:// is forbidden)';
 
 const json = schema => ({ 'application/json': { schema } });
 const response = (description, schema) => ({ description, ...(schema ? { content: json(schema) } : {}) });
@@ -324,10 +327,11 @@ operation('post', '/api/sessions/{id}/schedules', 'createExecutionSchedule', '�
 operation('get', '/api/sessions/{id}/schedules', 'listExecutionSchedules', '分页读取Session调度', { auth: 'console', parameters: pageParameters, responses: { '200': response('同Session安全调度定义数组。', array(ref('Schedule'))) } });
 operation('get', '/api/schedules/{id}', 'getExecutionSchedule', '读取安全调度定义', { auth: 'console', responses: { '200': response('不含执行配置、宿主路径或凭证。', ref('Schedule')) } });
 for (const action of ['update', 'enable', 'pause']) operation('post', `/api/schedules/{id}/${action}`, `${action}ExecutionSchedule`, `${action}调度定义`, { auth: 'console', body: action === 'update' ? 'ScheduleUpdateRequest' : 'ScheduleVersionRequest', description: 'expectedVersion精确匹配才变更，version加一并原子写sync_schedule命令，ACK当前版本前保持pending_sync；旧版本ACK不能覆盖新定义。update传完整时间/授权定义并保留enabled和已用次数，暂停不取消既有Run。', responses: { '200': response('新版本安全调度定义。', ref('Schedule')) } });
-operation('post', '/api/internal/workflow/commands/claim', 'claimWorkflowCommand', '领取Workflow命令投递租约', { auth: 'workflow', body: 'WorkflowClaimRequest', description: 'workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。', responses: { '200': response('固定格式安全命令。', ref('WorkflowCommand')), '204': response('当前没有可领取命令，无正文。') } });
-operation('post', '/api/internal/workflow/commands/{id}/complete', 'completeWorkflowCommand', '确认当前投递租约', { auth: 'workflow', body: 'WorkflowCompleteRequest', description: '仅同worker与当前未到期claimToken可ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。', responses: { '204': response('投递已确认，无正文。') } });
+operation('post', '/api/internal/workflow/commands/claim', 'claimWorkflowCommand', '领取Workflow命令投递租约', { auth: 'workflow', body: 'WorkflowClaimRequest', description: 'workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。sync_schedule只领取当前definitionVersion，同Schedule有效租约串行互斥；尚未领取或租约过期的旧版本标记completed/errorCode=SCHEDULE_DEFINITION_SUPERSEDED，不推进syncStatus。有效旧租约结束前不领取新版。租约过期不能中断已发送的网络请求，Temporal更新仍需客户端按版本冲突令牌/单调版本进行fencing，禁止旧版本覆盖新版。', responses: { '200': response('固定格式安全命令。', ref('WorkflowCommand')), '204': response('当前没有可领取命令，无正文。') } });
+operation('post', '/api/internal/workflow/commands/{id}/complete', 'completeWorkflowCommand', '确认当前投递租约', { auth: 'workflow', body: 'WorkflowCompleteRequest', description: '仅同worker与当前未到期claimToken可首次ACK；过期或旧token返回409 WORKFLOW_COMMAND_LEASE_EXPIRED。成功完成后保留最后一代token摘要，相同worker和claimToken重放返回204且不重新推进同步状态；retry不能重放已完成ACK。', responses: { '204': response('投递已确认，无正文。') } });
 operation('post', '/api/internal/workflow/commands/{id}/retry', 'retryWorkflowCommand', '有限退避或停止重试', { auth: 'workflow', body: 'WorkflowRetryRequest', description: '有效租约内retryable=true退避1秒指数增长、最多300秒、最多10次；永久错误或耗尽转failed。只保存固定errorCode。', responses: { '204': response('重试或失败状态已保存，无正文。') } });
 operation('get', '/api/internal/workflow/jobs/{id}', 'observeWorkflowJob', '观察同一业务Run', { auth: 'workflow', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
+operation('get', '/api/internal/workflow/jobs/{id}/execution', 'getWorkflowJobExecution', '读取后台任务实际Workflow执行标识', { auth: 'workflow', description: '独立WorkflowBearer，仅返回数据库已授权任务的执行标识；服务端解析并核对Project/Task/Session、Run和occurrence归属，不接受客户端传入workflowId。未知资源或归属不一致404，Console/Daemon身份401。Dispatcher用于cancel实际Workflow，此GET不是Activity，不扩展JobObservation。', responses: { '200': response('三个必填安全标识字段。', ref('JobExecution')) } });
 operation('post', '/api/internal/workflow/jobs/{id}/dispatch', 'dispatchWorkflowJob', '幂等原子派发业务任务', { auth: 'workflow', body: 'OrchestrationEmptyRequest', description: '同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
 operation('post', '/api/internal/workflow/jobs/{id}/cancel', 'cancelWorkflowJob', '按持久截止时间取消业务任务', { auth: 'workflow', body: 'WorkflowCancelRequest', description: 'reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
 operation('get', '/api/internal/workflow/schedules/{id}', 'getWorkflowSchedule', '读取安全Schedule定义', { auth: 'workflow', responses: { '200': response('安全定义，仅用于同步Temporal Schedule。', ref('Schedule')) } });

@@ -45,6 +45,11 @@ export class WorkflowInternalController {
     this.workflowAuth.authenticate(authorization); return this.jobs.observe(id);
   }
 
+  @Get('jobs/:id/execution')
+  execution(@Param('id') id: string, @Headers('authorization') authorization?: string) {
+    this.workflowAuth.authenticate(authorization); return this.jobs.execution(id);
+  }
+
   @Post('jobs/:id/dispatch')
   @HttpCode(200)
   dispatch(@Param('id') id: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
