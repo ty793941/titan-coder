@@ -107,7 +107,8 @@ export class CloudExecutor {
     if (this.finished || this.reason) return;
     this.reason = reason;
     this.interrupt.abort();
-    this.stream?.kill('SIGTERM');
+    // Docker attach 会向容器转发 SIGTERM；SIGKILL 仅断开宿主 CLI。
+    this.stream?.kill('SIGKILL');
     if (reason !== 'shutdown') void this.stopContainer().catch(() => undefined);
   }
 
@@ -287,7 +288,7 @@ export class CloudExecutor {
       if (this.ownsState) { this.state.completed = stopped; await this.persist(); }
     } finally {
       clearTimeout(this.timer);
-      this.stream?.kill('SIGTERM');
+      this.stream?.kill('SIGKILL');
       this.secrets = [];
     }
   }
@@ -317,7 +318,7 @@ export class CloudExecutor {
         stream.stdout.off('data', data); stream.stdout.off('end', end); stream.off('close', close); stream.off('error', failure);
         this.interrupt.signal.removeEventListener('abort', abort);
       };
-      const failure = () => { if (settled) return; settled = true; detach(); stream.kill('SIGTERM'); reject(protocolError()); };
+      const failure = () => { if (settled) return; settled = true; detach(); stream.kill('SIGKILL'); reject(protocolError()); };
       const complete = () => {
         if (settled || !closed || !ended) return;
         if (buffer.length) { failure(); return; }
