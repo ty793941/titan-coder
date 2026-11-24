@@ -63,6 +63,10 @@ export class HandoffsService {
         throw new DomainError('VERSION_CONFLICT', 'handoff manifest is immutable');
       }
       const session = await trx.selectFrom('session').selectAll().where('id', '=', handoff.source_session_id).forUpdate().executeTakeFirstOrThrow();
+      const latestRun = await trx.selectFrom('run').select('id').where('session_id', '=', session.id).orderBy('attempt', 'desc').executeTakeFirst();
+      const activeRun = await trx.selectFrom('run').select('id').where('session_id', '=', session.id)
+        .where('status', 'in', ['queued', 'starting', 'running', 'waiting_input', 'reconnecting']).executeTakeFirst();
+      if (latestRun?.id !== handoff.source_run_id || activeRun) throw new DomainError('HANDOFF_CHECKPOINT_INVALID', 'snapshot requires the latest source run and no active execution');
       const run = await trx.selectFrom('run').selectAll().where('id', '=', handoff.source_run_id).forUpdate().executeTakeFirstOrThrow();
       if (session.status !== 'paused' || run.status !== 'paused' || run.checkpoint_id !== handoff.checkpoint_id) throw new DomainError('HANDOFF_CHECKPOINT_INVALID', 'source session must remain paused at the acknowledged checkpoint');
       const config = validateExecutionConfig(session.execution_config);

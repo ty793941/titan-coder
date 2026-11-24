@@ -65,9 +65,9 @@ export function validateExecutionConfig(input: unknown): z.infer<typeof executio
 }
 
 export const cloudSnapshotManifestSchema = z.object({
-  schemaVersion: z.literal(1), snapshotId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
+  schemaVersion: z.literal(1), snapshotId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
   baseRevision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), checksum: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-  fileCount: z.number().int().nonnegative().max(100000), totalBytes: z.number().int().nonnegative().max(512 * 1024 * 1024),
+  fileCount: z.number().int().nonnegative().max(10000), totalBytes: z.number().int().nonnegative().max(32 * 1024 * 1024),
 }).strict();
 export type CloudSnapshotManifest = z.infer<typeof cloudSnapshotManifestSchema>;
 export const handoffCreateRequestSchema = z.object({

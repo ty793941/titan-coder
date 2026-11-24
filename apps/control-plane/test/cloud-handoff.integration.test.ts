@@ -9,7 +9,7 @@ import { createTestApp } from '../src/test-app.js';
 let api: Awaited<ReturnType<typeof createTestApp>>;
 const consoleToken = `test-console-${randomUUID()}`;
 const oldToken = process.env.TITAN_CONSOLE_TOKEN;
-const manifest = () => ({ schemaVersion: 1, snapshotId: `snapshot_${randomUUID()}`, baseRevision: 'a'.repeat(40), checksum: `sha256:${'b'.repeat(64)}`, fileCount: 2, totalBytes: 100 });
+const manifest = () => ({ schemaVersion: 1, snapshotId: randomUUID(), baseRevision: 'a'.repeat(40), checksum: `sha256:${'b'.repeat(64)}`, fileCount: 2, totalBytes: 100 });
 const auth = (token: string) => `Bearer ${token}`;
 const cloudCapabilities = ['codex', 'cloud-session', 'container', 'snapshot-transfer', 'secret-lease'];
 const temporaryRoots: string[] = [];
@@ -64,6 +64,59 @@ async function artifactFixture() {
 }
 
 describe('bounded cloud control plane', () => {
+  it.each([
+    { elapsed: 40000, type: 'running' },
+    { elapsed: 100000, type: 'completed' },
+  ])('fences direct $type progress when cloud heartbeat is $elapsed ms old but both leases are valid', async ({ elapsed, type }) => {
+    const f = await ready();
+    await api.db.updateTable('daemon').set({ last_heartbeat_at: new Date(Date.now() - elapsed) }).where('id', '=', f.target.daemonId).execute();
+    const expires = new Date(Date.now() + 60000);
+    await api.db.updateTable('execution_job').set({ lease_expires_at: expires }).where('run_id', '=', f.dispatch.runId).execute();
+    await api.db.updateTable('cloud_execution').set({ lease_expires_at: expires }).where('run_id', '=', f.dispatch.runId).execute();
+    const eventId = randomUUID();
+    const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
+    const body = { claimToken: f.dispatch.claimToken, eventId, sequence: 1, type, payload: {} };
+    await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    expect((await api.get(`/api/sessions/${f.dispatch.sessionId}`).expect(200)).body.status).toBe('reconnecting');
+    expect((await api.get(`/api/runs/${f.dispatch.runId}`).expect(200)).body).toMatchObject({ status: 'reconnecting', errorCode: 'CLOUD_WORKER_DISCONNECTED' });
+    const job = await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
+    expect(job).toMatchObject({ status: 'blocked', claim_token_hash: null, lease_expires_at: null, cancel_requested: true });
+    expect(Number(job.last_sequence)).toBe(0);
+    expect(await api.db.selectFrom('execution_progress').select('event_id').where('event_id', '=', eventId).execute()).toEqual([]);
+    const execution = await api.db.selectFrom('cloud_execution').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
+    expect(execution).toMatchObject({ lease_expires_at: null, error_code: 'CLOUD_WORKER_DISCONNECTED' });
+    expect((await api.db.selectFrom('secret_lease').selectAll().where('id', '=', f.dispatch.cloud.secretLeaseId).executeTakeFirstOrThrow()).revoked_at).toBeTruthy();
+    await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    const events = await api.db.selectFrom('event').innerJoin('outbox_event', 'event.event_id', 'outbox_event.event_id').select('event.event_type').where('event.run_id', '=', f.dispatch.runId).execute();
+    expect(events.filter(event => event.event_type === 'cloud_execution.reconnecting')).toHaveLength(1);
+    expect(events.some(event => event.event_type === `run.${type}`)).toBe(false);
+  });
+
+  it('keeps local progress compatible with an old heartbeat while the job lease is valid', async () => {
+    const f = await fixture();
+    const run = (await api.post(`/api/runs/${f.run.id}/resume`).send({ idempotencyKey: randomUUID() }).expect(201)).body;
+    const dispatch = (await api.post(`/api/daemons/${f.source.daemonId}/claim`).set('Authorization', auth(f.source.authToken)).send({}).expect(200)).body;
+    await api.db.updateTable('daemon').set({ last_heartbeat_at: new Date(Date.now() - 100000) }).where('id', '=', f.source.daemonId).execute();
+    await api.post(`/api/daemons/${f.source.daemonId}/runs/${run.id}/progress`).set('Authorization', auth(f.source.authToken)).send({ claimToken: dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'completed', payload: {} }).expect(200);
+    expect((await api.get(`/api/runs/${run.id}`).expect(200)).body.status).toBe('completed');
+  });
+
+  it.each(['running', 'paused'])('rejects an old snapshot ACK after a newer source attempt is %s and the old run is paused again', async status => {
+    const f = await fixture();
+    const { handoff } = await requested(f);
+    const run = (await api.post(`/api/runs/${f.run.id}/resume`).send({ idempotencyKey: randomUUID() }).expect(201)).body;
+    const dispatch = (await api.post(`/api/daemons/${f.source.daemonId}/claim`).set('Authorization', auth(f.source.authToken)).send({}).expect(200)).body;
+    await api.post(`/api/daemons/${f.source.daemonId}/runs/${run.id}/progress`).set('Authorization', auth(f.source.authToken)).send({ claimToken: dispatch.claimToken, eventId: randomUUID(), sequence: 1, type: 'running', payload: {} }).expect(200);
+    if (status === 'paused') await api.post(`/api/runs/${run.id}/pause`).expect(200);
+    await api.post(`/api/runs/${f.run.id}/pause`).expect(200);
+    // 旧 Run 的暂停可能使 Session 投影为 paused，不能据此认可旧的停止声明。
+    await api.db.updateTable('session').set({ status: 'paused' }).where('id', '=', f.session.id).execute();
+    const response = await api.post(`/api/daemons/${f.source.daemonId}/handoffs/${handoff.id}/snapshot`).set('Authorization', auth(f.source.authToken)).send({ manifest: manifest(), stopped: true }).expect(400);
+    expect(response.body.code).toBe('HANDOFF_CHECKPOINT_INVALID');
+    expect((await api.get(`/api/handoffs/${handoff.id}`).set('Authorization', auth(consoleToken)).expect(200)).body).toMatchObject({ status: 'requested', targetSessionId: null });
+    expect(await api.db.selectFrom('session').select('id').where('parent_session_id', '=', f.session.id).execute()).toEqual([]);
+  });
+
   it('requires management auth and records only requested until a source daemon acknowledges a snapshot', async () => {
     const f = await fixture();
     const body = { checkpointId: f.checkpoint.id, targetEnvironment: 'cloud', workspaceSync: { mode: 'git-patch' }, idempotencyKey: randomUUID() };

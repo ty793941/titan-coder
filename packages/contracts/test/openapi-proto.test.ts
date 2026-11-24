@@ -21,8 +21,8 @@ function roundTrip(type: string, file: string, input: string) {
 describe.skipIf(!hasProtoc)('Phase 1 reserved Protobuf contracts (requires local protoc)', () => {
   it('round trips cloud dispatch references without host paths or secrets', () => {
     const output = roundTrip('titan.daemon.v1.RunDispatch', gateway, `
-      config { base_url_ref: "keychain://url" environment_type: "cloud" snapshot_manifest_ref: "snapshot://snapshot_1" secret_lease_ref: "lease://lease_1" }
-      cloud { execution_id: "cloud_1" snapshot { schema_version: 1 snapshot_id: "snapshot_1" base_revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" file_count: 2 total_bytes: 100 } secret_lease_id: "lease_1" secret_lease_expires_at: "2026-11-24T00:00:00.000Z" }
+      config { base_url_ref: "keychain://url" environment_type: "cloud" snapshot_manifest_ref: "snapshot://12345678-abcd-4abc-8abc-123456789abc" secret_lease_ref: "lease://lease_1" }
+      cloud { execution_id: "cloud_1" snapshot { schema_version: 1 snapshot_id: "12345678-abcd-4abc-8abc-123456789abc" base_revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" file_count: 2 total_bytes: 100 } secret_lease_id: "lease_1" secret_lease_expires_at: "2026-11-24T00:00:00.000Z" }
     `);
     expect(output).toContain('base_url_ref: "keychain://url"');
     expect(output).toContain('execution_id: "cloud_1"');

@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T02:10:22.264Z"
+    "generatedAt": "2026-11-24T03:37:38.473Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -1612,7 +1612,7 @@
       "post": {
         "operationId": "reportRunProgress",
         "summary": "上报 Run 进度与检查点",
-        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。 cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。",
+        "description": "要求 Daemon Bearer 与正文 claimToken，校验 job 归属、有效租约、连续进度序号。eventId 相同且规范化正文相同返回 accepted=false，不重复推进；不同正文或跨 job 复用返回 409。认证及领取证明有效时，paused Run 的迟到进度返回 accepted=false/status=paused/cancelRequested=true，不覆盖暂停状态；已被过期处理清除的领取证明仍会被拒绝。 cloud终态同步执行和Handoff；waiting_input保留Run等待状态，但容器尝试标记failed、撤销凭证租约。容器生命周期由独立cloud接口上报，保持七种progress类型。 cloud还要求daemonStatus=ready；认证及领取证明有效但心跳失联时，即使执行租约未过期也拒收progress，先提交blocked/reconnecting、清除领取证明和租约、撤销Secret Lease及Outbox事实，再返回403 PERMISSION_DENIED，不续租、不完成Run。local保持既有行为。 cloud工件URI必须已由宿主映射为唯一登记workspaceRoot/sessionId/session/.titan/artifacts/UUID/logicalPath，严格绑定cloud_execution、Session和Daemon；拒绝虚拟容器URI、其他Session路径和多root歧义。checkpoint及结构化tool output均校验，保留artifact://引用与checksum。",
         "security": [
           {
             "DaemonBearer": []
@@ -2009,7 +2009,7 @@
       "post": {
         "operationId": "acknowledgeHandoffSnapshot",
         "summary": "确认停止并登记 Snapshot 清单",
-        "description": "stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。",
+        "description": "stopped:true 表示源 Worker 已停止且本地 Outbox 已排空，由源 Daemon 负责真实性。CP 不读取文件；验证 paused 和 checkpoint 归属后选有容量的 ready cloud Daemon，原子创建子 Session、新 Run、新 checkpoint、job、执行与一次性5分钟 Secret Lease。只导入消息，工具结果与 evidence 清空。重复相同 manifest 返回原目标；不同清单409。snapshot://snapshotId 由共享传输根解析，不含宿主路径。 创建目标前锁定源Session，要求sourceRun为attempt最大的最新Run且该Session没有queued/starting/running/waiting_input/reconnecting Run；旧Run再次paused不能绕过此校验，失败返回400 HANDOFF_CHECKPOINT_INVALID。manifest.snapshotId为小写UUID，fileCount最多10000、totalBytes最多33554432，baseRevision为40或64位小写十六进制、checksum仅允许sha256:加64位小写十六进制。",
         "security": [
           {
             "DaemonBearer": []
@@ -2708,7 +2708,7 @@
           },
           "snapshotId": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{1,200}$"
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           },
           "baseRevision": {
             "type": "string",
@@ -2721,12 +2721,12 @@
           "fileCount": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 100000
+            "maximum": 10000
           },
           "totalBytes": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 536870912
+            "maximum": 33554432
           }
         },
         "required": [
@@ -2794,7 +2794,7 @@
               },
               "snapshotId": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9_-]{1,200}$"
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
               },
               "baseRevision": {
                 "type": "string",
@@ -2807,12 +2807,12 @@
               "fileCount": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 100000
+                "maximum": 10000
               },
               "totalBytes": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 536870912
+                "maximum": 33554432
               }
             },
             "required": [

@@ -230,6 +230,12 @@ describe('Phase 1 OpenAPI freeze', () => {
     expect(schemas.RunDispatch.properties.cloud).toEqual(ref('CloudDispatch'));
     expect(schemas.CloudDispatch.required).toEqual(['executionId', 'snapshot', 'secretLeaseId', 'secretLeaseExpiresAt']);
     expect(schemas.CloudSnapshotManifest.additionalProperties).toBe(false);
+    const manifest = schemas.CloudSnapshotManifest.properties;
+    expect(manifest.fileCount.maximum).toBe(10000);
+    expect(manifest.totalBytes.maximum).toBe(32 * 1024 * 1024);
+    expect(new RegExp(manifest.snapshotId.pattern).test('12345678-abcd-4abc-8abc-123456789abc')).toBe(true);
+    expect(new RegExp(manifest.snapshotId.pattern).test('snapshot_12345678-abcd-4abc-8abc-123456789abc')).toBe(false);
+    expect(new RegExp(manifest.snapshotId.pattern).test('12345678-ABCD-4ABC-8ABC-123456789ABC')).toBe(false);
     expect(schemas.RunProgress.properties.type.enum).toEqual(['running', 'output', 'checkpoint', 'completed', 'failed', 'cancelled', 'waiting_input']);
     expect(api.paths['/api/sessions/{id}/handoff'].post.security).toEqual([{ ConsoleBearer: [] }]);
     expect(api.paths['/api/daemons/{id}/handoffs/{handoffId}/snapshot'].post.security).toEqual([{ DaemonBearer: [] }]);

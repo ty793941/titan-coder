@@ -156,13 +156,18 @@ export class ExecutionService {
     const checkpoint = input.checkpoint ? normalizeCheckpoint(input.checkpoint) : undefined;
     const { claimToken, ...content } = input;
     const requestHash = tokenHash(canonicalJson({ ...content, ...(checkpoint ? { checkpoint } : {}) }));
-    return this.database.db.transaction().execute(async trx => {
+    const result = await this.database.db.transaction().execute<ProgressAck | DomainError>(async trx => {
       const daemon = await trx.selectFrom('daemon').selectAll().where('id', '=', daemonId).forUpdate().executeTakeFirstOrThrow();
       if (daemon.status === 'revoked') throw new DomainError('PERMISSION_DENIED', 'daemon is revoked');
       const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).where('daemon_id', '=', daemonId).forUpdate().executeTakeFirst();
       if (!job) throw new DomainError('RESOURCE_NOT_FOUND', 'execution job was not found');
       if (!sameToken(claimToken, job.claim_token_hash)) throw new DomainError('PERMISSION_DENIED', 'invalid claim token');
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirstOrThrow();
+      if (executionConfigSchema.parse(job.config).environmentType === 'cloud' && daemonStatus(daemon) !== 'ready') {
+        await this.cloud.disconnect(trx, runId);
+        // 先提交隔离事实，再在事务外返回拒绝，避免异常回滚使旧领取证明继续有效。
+        return new DomainError('PERMISSION_DENIED', 'cloud daemon heartbeat is not ready');
+      }
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id')
         .select(['task.project_id', 'task.id as task_id']).where('session.id', '=', run.session_id).executeTakeFirstOrThrow();
       const ack = (accepted: boolean): ProgressAck => ({ accepted, status: run.status, cancelRequested: job.cancel_requested || run.status === 'paused' });
@@ -211,6 +216,8 @@ export class ExecutionService {
       });
       return { accepted: true, status, cancelRequested: job.cancel_requested || status === 'cancelled' };
     });
+    if (result instanceof DomainError) throw result;
+    return result;
   }
 
   private progressErrorCode(payload: Record<string, unknown>): string {
