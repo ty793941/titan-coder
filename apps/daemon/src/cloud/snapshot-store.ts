@@ -1,10 +1,10 @@
-import { constants, openSync, closeSync, fstatSync, lstatSync, mkdirSync, readdirSync, readSync, writeSync, fsyncSync, renameSync } from 'node:fs';
+import { constants, openSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, readdirSync, readSync, writeSync, fsyncSync, renameSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { containsSensitive, containsSensitivePath, containsUnsafePath } from '@titan/agent-core';
-import type { CloudSnapshotManifest } from './types.js';
+import type { CloudSnapshotFile, CloudSnapshotFileMode, CloudSnapshotManifest } from './types.js';
 
 export type { CloudSnapshotManifest } from './types.js';
 
@@ -13,6 +13,9 @@ const MAX_TOTAL = 32 * MAX_FILE;
 const MAX_FILES = 10_000;
 const MAX_PACKAGE = 64 * MAX_FILE;
 const excludedNames = new Set(['.git', '.titan', '.humanlayer', '.codegraph', 'node_modules', 'dist', 'coverage', 'credentials', '.ssh', '.aws', '.gnupg', '.npmrc', '.netrc']);
+const sourceExtensions = new Set([
+  'c', 'cc', 'cpp', 'cxx', 'h', 'hh', 'hpp', 'cs', 'dart', 'ex', 'exs', 'erl', 'fs', 'fsx', 'go', 'groovy', 'hbs', 'hs', 'java', 'jl', 'js', 'jsx', 'json5', 'kt', 'kts', 'less', 'lua', 'm', 'mm', 'mjs', 'mts', 'php', 'pl', 'pm', 'ps1', 'py', 'rb', 'rs', 'rust', 'scala', 'scss', 'sh', 'sql', 'svelte', 'swift', 't', 'tf', 'ts', 'tsx', 'vb', 'vue', 'xml', 'yaml', 'yml', 'zsh',
+]);
 const noFollow = process.platform === 'darwin' ? 0x20000000 : constants.O_NOFOLLOW;
 const hash = (bytes: Uint8Array) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 function fail(kind: string): never { throw new Error(`CLOUD_SNAPSHOT_${kind}`); }
@@ -20,8 +23,13 @@ const inside = (root: string, path: string) => { const child = relative(root, pa
 const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 
 function excluded(path: string): boolean {
-  return containsSensitivePath(path) || path.split('/').some(part => excludedNames.has(part) || part.startsWith('.env')
-    || /(?:^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$)|\.(?:pem|key|p12|pfx|keystore)$|(?:^|[-_.])(?:auth|keys?|tokens?|secrets?|passwords?|credentials?|api[-_]?keys?|private[-_]?keys?|service[-_]?accounts?)(?:[-_.]|$))/i.test(part));
+  const parts = path.split('/');
+  const filename = parts.at(-1) ?? '';
+  const extension = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1).toLowerCase() : '';
+  const isSourceFile = sourceExtensions.has(extension);
+  return containsSensitivePath(path) || parts.some(part => excludedNames.has(part) || part.startsWith('.env')
+    || /(?:^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$)|\.(?:pem|key|p12|pfx|keystore)$)/i.test(part))
+    || (!isSourceFile && /(?:^|[-_.])(?:auth|keys?|tokens?|secrets?|passwords?|credentials?|api[-_]?keys?|private[-_]?keys?|service[-_]?accounts?)(?:[-_.]|$)/i.test(filename));
 }
 
 function safeRelative(path: unknown): path is string {
@@ -104,17 +112,18 @@ function readBytes(path: string, limit: number): Buffer {
   } finally { closeSync(fd); }
 }
 
-function writeNew(path: string, bytes: Uint8Array): void {
+function writeNew(path: string, bytes: Uint8Array, mode = 0o600): void {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
   try {
+    fchmodSync(fd, mode);
     let offset = 0;
     while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
     fsyncSync(fd);
   } finally { closeSync(fd); }
 }
 
-interface SnapshotFile { path: string; content: string }
-interface SnapshotPackage { schemaVersion: 1; snapshotId: string; baseRevision: string; files: SnapshotFile[] }
+type SnapshotMode = CloudSnapshotFileMode;
+interface SnapshotPackage { schemaVersion: 1; snapshotId: string; baseRevision: string; files: CloudSnapshotFile[] }
 
 export class LocalSnapshotStore {
   private readonly root: string;
@@ -152,7 +161,7 @@ export class LocalSnapshotStore {
         if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision)) fail('REVISION');
         baseRevision = revision;
       } catch { fail('REVISION'); }
-      const files: SnapshotFile[] = [];
+      const files: CloudSnapshotFile[] = [];
       let totalBytes = 0;
       const walk = (path: string, prefix: string, depth: number): void => {
         if (depth > 64) fail('LIMIT');
@@ -175,7 +184,7 @@ export class LocalSnapshotStore {
                 if (containsSensitive(bytes.toString('utf8')) || containsSensitive(bytes.toString('utf16le'))) fail('SENSITIVE');
                 totalBytes += bytes.length;
                 if (totalBytes > MAX_TOTAL) fail('LIMIT');
-                files.push({ path: child, content: bytes.toString('base64') });
+                files.push({ path: child, content: bytes.toString('base64'), mode: (info.mode & 0o100) === 0o100 ? 0o100 : 0 });
               } else fail('PATH');
             }
           });
@@ -205,11 +214,12 @@ export class LocalSnapshotStore {
       let pack: SnapshotPackage;
       try { pack = JSON.parse(bytes.toString('utf8')); } catch { fail('INVALID'); }
       if (!pack || pack.schemaVersion !== 1 || pack.snapshotId !== manifest.snapshotId || pack.baseRevision !== manifest.baseRevision || !Array.isArray(pack.files) || pack.files.length !== manifest.fileCount) fail('INVALID');
-      const decoded: { path: string; bytes: Buffer }[] = [];
+      const decoded: { path: string; bytes: Buffer; mode: SnapshotMode }[] = [];
       const paths = new Set<string>();
       let total = 0;
       for (const file of pack.files) {
         if (!file || !safeRelative(file.path) || excluded(file.path) || paths.has(file.path) || typeof file.content !== 'string') fail('INVALID');
+        if (file.mode !== undefined && file.mode !== 0 && file.mode !== 0o100) fail('INVALID');
         if (file.content.length > 4 * Math.ceil(MAX_FILE / 3)) fail('LIMIT');
         const content = Buffer.from(file.content, 'base64');
         if (content.toString('base64') !== file.content) fail('INVALID');
@@ -218,7 +228,7 @@ export class LocalSnapshotStore {
         paths.add(file.path);
         total += content.length;
         if (total > MAX_TOTAL) fail('LIMIT');
-        decoded.push({ path: file.path, bytes: content });
+        decoded.push({ path: file.path, bytes: content, mode: file.mode ?? 0 });
       }
       for (const path of paths) {
         const parts = path.split('/');
@@ -239,14 +249,14 @@ export class LocalSnapshotStore {
           const staging = `${parentAnchor}/.titan-snapshot-${randomUUID()}`;
           mkdirSync(staging, { mode: 0o700 });
           withDirectory(staging, anchor => {
-            const write = (parts: string[], currentAnchor: string, bytes: Buffer): void => {
+            const write = (parts: string[], currentAnchor: string, bytes: Buffer, mode: SnapshotMode): void => {
               const name = parts[0]!;
-              if (parts.length === 1) { writeNew(`${currentAnchor}/${name}`, bytes); return; }
+              if (parts.length === 1) { writeNew(`${currentAnchor}/${name}`, bytes, mode === 0o100 ? 0o700 : 0o600); return; }
               const child = `${currentAnchor}/${name}`;
               try { mkdirSync(child, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-              withDirectory(child, childAnchor => write(parts.slice(1), childAnchor, bytes));
+              withDirectory(child, childAnchor => write(parts.slice(1), childAnchor, bytes, mode));
             };
-            for (const file of decoded) write(file.path.split('/'), anchor, file.bytes);
+            for (const file of decoded) write(file.path.split('/'), anchor, file.bytes, file.mode);
           });
           if (!same(fstatSync(parent), lstatSync(dirname(target)))) fail('CHANGED');
           // 先独占预留空目录，再原子替换；失败的私有 staging 留待显式回收。

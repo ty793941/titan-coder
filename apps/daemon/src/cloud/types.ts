@@ -9,6 +9,13 @@ export interface CloudSnapshotManifest {
   totalBytes: number;
 }
 
+export type CloudSnapshotFileMode = 0 | 0o100;
+export interface CloudSnapshotFile {
+  path: string;
+  content: string;
+  mode?: CloudSnapshotFileMode;
+}
+
 export interface ContainerHandle { id: string; name: string }
 export interface ContainerScope { sessionId: string; runId: string }
 export interface ContainerSpec extends ContainerScope { workspacePath: string }

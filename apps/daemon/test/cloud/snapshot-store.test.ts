@@ -38,6 +38,69 @@ describe('LocalSnapshotStore', () => {
     expect((await stat(destination)).mode & 0o777).toBe(0o700);
   });
 
+  it('roundtrips ordinary auth, console-auth, token, and key source modules', async () => {
+    const { root, source, store } = await fixture();
+    const files = {
+      'auth.ts': 'export const moduleValue = "public-auth-module";\n',
+      'console-auth.ts': 'export { moduleValue } from "./auth.js";\n',
+      'token.ts': 'export const moduleValue = "public-token-type";\n',
+      'key.ts': 'export type ModuleKey = string;\n',
+    };
+    for (const [path, content] of Object.entries(files)) await writeFile(join(source, path), content, { mode: 0o600 });
+    const manifest = await store.exportWorkspace(source);
+    const packagePath = join(await realpath(join(root, 'snapshots')), `${manifest.snapshotId}.json`);
+    const pack = JSON.parse(await readFile(packagePath, 'utf8'));
+    expect(pack.files.map((file: { path: string }) => file.path).sort()).toEqual(Object.keys(files).sort());
+    const destination = join(root, 'source-roundtrip');
+    await new LocalSnapshotStore({ root: join(root, 'snapshots'), workspaceRoots: [root] }).materialize(manifest, destination);
+    for (const [path, content] of Object.entries(files)) expect(await readFile(join(destination, path), 'utf8')).toBe(content);
+  });
+
+  it('preserves an owner executable shell script and restores safe file modes', async () => {
+    const { root, source, snapshots, store } = await fixture();
+    const script = join(source, 'run-token.sh');
+    await writeFile(script, '#!/bin/sh\nprintf executable-ok\n', { mode: 0o700 });
+    await writeFile(join(source, 'plain.ts'), 'export const plain = true;\n', { mode: 0o600 });
+    await chmod(script, 0o700);
+    const manifest = await store.exportWorkspace(source);
+    const pack = JSON.parse(await readFile(join(snapshots, `${manifest.snapshotId}.json`), 'utf8'));
+    expect(pack.files.find((file: { path: string }) => file.path === 'run-token.sh').mode).toBe(0o100);
+    expect(pack.files.find((file: { path: string }) => file.path === 'plain.ts').mode).toBe(0);
+    const destination = join(root, 'mode-roundtrip');
+    await new LocalSnapshotStore({ root: snapshots, workspaceRoots: [root] }).materialize(manifest, destination);
+    expect((await stat(join(destination, 'run-token.sh'))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(destination, 'plain.ts'))).mode & 0o777).toBe(0o600);
+    expect(execFileSync(join(destination, 'run-token.sh'), { encoding: 'utf8' })).toBe('executable-ok');
+  });
+
+  it('rejects group, world, setuid, and arbitrary executable mode values', async () => {
+    const { root, source, snapshots, store } = await fixture();
+    await writeFile(join(source, 'script.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const manifest = await store.exportWorkspace(source);
+    const packagePath = join(snapshots, `${manifest.snapshotId}.json`);
+    const pack = JSON.parse(await readFile(packagePath, 'utf8'));
+    pack.files[0].mode = 0o755;
+    const bytes = Buffer.from(JSON.stringify(pack));
+    await writeFile(packagePath, bytes);
+    const changed = { ...manifest, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+    await expect(store.materialize(changed, join(root, 'malicious-mode'))).rejects.toThrow('CLOUD_SNAPSHOT_INVALID');
+  });
+
+  it('materializes a version one package without mode as a non-executable file', async () => {
+    const { root, source, snapshots, store } = await fixture();
+    await writeFile(join(source, 'legacy.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const manifest = await store.exportWorkspace(source);
+    const packagePath = join(snapshots, `${manifest.snapshotId}.json`);
+    const pack = JSON.parse(await readFile(packagePath, 'utf8'));
+    delete pack.files[0].mode;
+    const bytes = Buffer.from(JSON.stringify(pack));
+    await writeFile(packagePath, bytes);
+    const changed = { ...manifest, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+    const destination = join(root, 'legacy-mode');
+    await store.materialize(changed, destination);
+    expect((await stat(join(destination, 'legacy.sh'))).mode & 0o777).toBe(0o600);
+  });
+
   it('excludes metadata, dependencies, credentials, environment and linked files', async () => {
     const { source, store } = await fixture();
     for (const name of ['.git', '.titan', '.humanlayer', '.codegraph', 'node_modules', 'dist', 'coverage', 'credentials']) {
