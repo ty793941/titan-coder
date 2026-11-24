@@ -25,3 +25,4 @@ ON CONFLICT (id) DO NOTHING;
 -- Artifact 的 reference 和 metadata 由 schema.sql 提供，运行时写入时必须保持 URI 与元数据不可变。
 -- 云端执行、Handoff 和短期 Secret Lease 仅由认证事务创建，不初始化凭证或伪租约。
 -- 旧 Session 默认为 local，checkpoint.source_checkpoint_id 仅在跨环境导入时设置。
+-- 后台任务、调度、触发和 Workflow 命令仅由授权事务创建，不种入启用定义或服务凭证。

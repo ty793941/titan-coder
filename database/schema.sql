@@ -287,3 +287,80 @@ CREATE TABLE IF NOT EXISTS cloud_execution (
 CREATE INDEX IF NOT EXISTS idx_cloud_execution_daemon_status ON cloud_execution(daemon_id, status);
 CREATE INDEX IF NOT EXISTS idx_handoff_source_pending ON session_handoff(source_daemon_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_handoff_source_active ON session_handoff(source_session_id) WHERE status IN ('requested', 'starting');
+
+CREATE TABLE IF NOT EXISTS execution_schedule (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  task_id TEXT NOT NULL REFERENCES task(id),
+  session_id TEXT NOT NULL REFERENCES session(id),
+  plan_hash TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  cron TEXT,
+  interval_seconds INTEGER CHECK (interval_seconds BETWEEN 60 AND 31536000),
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL CHECK (ends_at > starts_at),
+  max_runs INTEGER NOT NULL CHECK (max_runs BETWEEN 1 AND 100),
+  run_count INTEGER NOT NULL DEFAULT 0 CHECK (run_count BETWEEN 0 AND 100),
+  overlap_policy TEXT NOT NULL DEFAULT 'skip' CHECK (overlap_policy = 'skip'),
+  catchup_window_seconds INTEGER NOT NULL DEFAULT 60 CHECK (catchup_window_seconds BETWEEN 10 AND 3600),
+  catchup_until TIMESTAMPTZ,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  sync_status TEXT NOT NULL DEFAULT 'pending_sync' CHECK (sync_status IN ('pending_sync','active','paused','blocked')),
+  temporal_schedule_id TEXT NOT NULL UNIQUE,
+  version INTEGER NOT NULL DEFAULT 1,
+  requested_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((cron IS NULL) <> (interval_seconds IS NULL))
+);
+CREATE TABLE IF NOT EXISTS background_job (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  task_id TEXT NOT NULL REFERENCES task(id),
+  session_id TEXT NOT NULL REFERENCES session(id),
+  run_id TEXT UNIQUE REFERENCES run(id),
+  schedule_id TEXT REFERENCES execution_schedule(id),
+  definition_version INTEGER,
+  kind TEXT NOT NULL CHECK (kind IN ('run','observe')),
+  workflow_version INTEGER NOT NULL DEFAULT 1 CHECK (workflow_version = 1),
+  workflow_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending_dispatch' CHECK (status IN ('pending_dispatch','dispatching','running','waiting_input','reconnecting','cancel_requested','completed','failed','cancelled','expired')),
+  deadline_at TIMESTAMPTZ NOT NULL,
+  plan_hash TEXT NOT NULL,
+  cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  error_code TEXT,
+  requested_by TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((schedule_id IS NULL) = (definition_version IS NULL))
+);
+CREATE TABLE IF NOT EXISTS workflow_command (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('start_job','cancel_job','sync_schedule')),
+  target_id TEXT NOT NULL,
+  definition_version INTEGER,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  request_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','claimed','completed','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 10),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  worker_id TEXT,
+  claim_token_hash TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS schedule_occurrence (
+  id TEXT PRIMARY KEY,
+  schedule_id TEXT NOT NULL REFERENCES execution_schedule(id),
+  definition_version INTEGER NOT NULL,
+  occurrence_id TEXT NOT NULL UNIQUE,
+  scheduled_at TIMESTAMPTZ NOT NULL,
+  admitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  job_id TEXT UNIQUE REFERENCES background_job(id),
+  status TEXT NOT NULL CHECK (status IN ('created','dispatched','skipped')),
+  error_code TEXT,
+  UNIQUE(schedule_id, definition_version, scheduled_at)
+);
+CREATE INDEX IF NOT EXISTS idx_background_job_session ON background_job(session_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_schedule_session ON execution_schedule(session_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_workflow_command_pending ON workflow_command(status, next_attempt_at, created_at);
