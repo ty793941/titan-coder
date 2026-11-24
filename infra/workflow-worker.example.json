@@ -1,0 +1,10 @@
+{
+  "temporalAddress": "127.0.0.1:7233",
+  "namespace": "titan",
+  "taskQueue": "titan-orchestration-v1",
+  "controlPlaneUrl": "http://127.0.0.1:3301",
+  "workerId": "local",
+  "credentialRef": "keychain://titan-workflow-service",
+  "pollIntervalMs": 1000,
+  "requestTimeoutMs": 5000
+}

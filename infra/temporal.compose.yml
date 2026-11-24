@@ -1,0 +1,48 @@
+services:
+  temporal-storage-init:
+    image: temporalio/temporal:1.5.1@sha256:33cafeff516ee864c73018f0ce6b2b61d2921fce45c1943b0b6619b27502b778
+    profiles:
+      - temporal
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - chown 1000:1000 /data
+    volumes:
+      - titan-temporal-data:/data
+    restart: "no"
+
+  temporal:
+    image: temporalio/temporal:1.5.1@sha256:33cafeff516ee864c73018f0ce6b2b61d2921fce45c1943b0b6619b27502b778
+    profiles:
+      - temporal
+    depends_on:
+      temporal-storage-init:
+        condition: service_completed_successfully
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --db-filename=/data/temporal.db
+      - --namespace=titan
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    volumes:
+      - titan-temporal-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - temporal
+        - operator
+        - cluster
+        - health
+        - --address
+        - 127.0.0.1:7233
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  titan-temporal-data:
