@@ -136,6 +136,20 @@ Phase 5  高级自动化：Teams、Cron、Workflow Marketplace、规模化部署
 - 复杂多租户计费。
 - 原生 Claude、Gemini 等更多 Runtime。
 
+### 3.1 Phase 2A 已实现边界
+
+当前仓库已完成一个本机可验收的 Cloud Worker MVP：
+
+- 现有 Daemon 支持 `environmentType=cloud`，在宿主内创建独立 Docker Session Container。
+- Cloud Executor 支持容器创建、启动、取消、超时、恢复、owner fencing、Progress 回传和 ACK 后清理。
+- Source Daemon 可在暂停确认和 Outbox 排空后导出受控 Snapshot，并通过 Handoff 创建新的 cloud Session。
+- Snapshot 使用完整工作区内容、路径/敏感信息扫描、文件数量/大小限制和 `sha256:` 校验和。
+- Secret Lease 只保存引用和生命周期；宿主通过一次性内存 Secret Broker 解析 Keychain 引用，再通过容器 stdin 注入。
+- Control Plane 支持 Handoff、Cloud Execution 生命周期、失联 fencing、旧 Run Snapshot ACK 拒绝、Cloud Artifact 宿主路径校验和 SSE/Outbox 事件。
+- `apps/agent-runtime/Dockerfile` 提供非 root、只读根、受限网络和 Linux Codex 版本固定的 Session 镜像。
+
+Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](cloud-worker-acceptance.md)。真实 Temporal、Redis、MinIO/S3、Vault/KMS、Kubernetes、生产级 Secret Broker 和多租户调度仍属于后续 Phase 2/4 治理范围。
+
 ## 4. Phase 3：Web UI 与多人协作
 
 ### 包含

@@ -10,8 +10,8 @@ COPY packages/contracts ./packages/contracts
 COPY packages/daemon-protocol ./packages/daemon-protocol
 COPY packages/agent-core ./packages/agent-core
 COPY apps/agent-runtime ./apps/agent-runtime
-RUN pnpm --filter @titan/agent-runtime... install --frozen-lockfile --ignore-scripts --fetch-timeout=20000 --fetch-retries=1 \
-    && pnpm --filter @titan/agent-runtime... build \
+RUN pnpm --filter @titan/agent-runtime... install --frozen-lockfile --ignore-scripts --fetch-timeout=20000 --fetch-retries=1
+RUN pnpm --filter @titan/agent-runtime... build \
     && pnpm --filter @titan/agent-runtime deploy --legacy --prod /runtime \
     && test -f /runtime/dist/container-worker.js
 

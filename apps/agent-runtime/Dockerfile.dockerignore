@@ -31,6 +31,9 @@
 **/credentials/**
 **/node_modules/**
 **/dist/**
+**/*.tsbuildinfo
+**/.turbo/**
+**/test/**
 **/.git/**
 **/.titan/**
 **/.humanlayer/**
