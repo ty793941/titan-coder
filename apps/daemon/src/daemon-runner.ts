@@ -3,15 +3,22 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import type { DaemonRegistration, RunDispatch } from '@titan/daemon-protocol';
+import { cloudSnapshotManifestSchema } from '@titan/contracts';
+import { resolveCredential } from '../../agent-runtime/dist/credentials.js';
 import { DaemonClient, DaemonHttpError, DaemonTransportError, type DeviceCredential } from './daemon-client.js';
 import { readDeviceCredential, saveDeviceCredential } from './device-state.js';
 import { PersistentOutbox } from './persistent-outbox.js';
-import { ensurePrivateDirectory } from './private-state.js';
+import { ensurePrivateDirectory, openPrivateFile } from './private-state.js';
 import { sanitizeProgress } from './progress-safety.js';
 import { RuntimeWorker } from './runtime-worker.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { StateLease } from './state-lease.js';
+import { CloudExecutor, type CloudExecutorOptions } from './cloud/cloud-executor.js';
+import { DockerRuntime } from './cloud/docker-runtime.js';
+import { LocalSnapshotStore } from './cloud/snapshot-store.js';
+import { SecretBroker } from './cloud/secret-broker.js';
 
 export type DaemonRunnerOptions = {
   baseUrl: string;
@@ -23,6 +30,9 @@ export type DaemonRunnerOptions = {
   runnerArgs?: string[];
   credentialEnv?: string[];
   localPolicy?: { enabledSkills?: string[]; trustedCode?: boolean };
+  environmentType?: 'local' | 'cloud';
+  cloud?: { image: string; workspaceRoot: string; snapshotRoot: string; network?: string };
+  handoff?: { snapshotRoot: string };
   pollIntervalMs?: number;
   heartbeatIntervalMs?: number;
   retryMaxMs?: number;
@@ -48,13 +58,21 @@ export class DaemonRunner {
   private readonly options: DaemonRunnerOptions;
   private readonly client: DaemonClient;
   private readonly workspace: WorkspaceManager;
-  private active: RuntimeWorker | undefined;
+  private active: RuntimeWorker | CloudExecutor | undefined;
+  private finishedCloud: CloudExecutor | undefined;
+  private cloudOptions: CloudExecutorOptions | undefined;
+  private sourceSnapshots: LocalSnapshotStore | undefined;
   private workerError: unknown;
   private running = false;
 
   constructor(options: DaemonRunnerOptions) {
     this.options = structuredClone(options);
     if (!options.workspaceRoots.length || options.workspaceRoots.some(root => !isAbsolute(root)) || !isAbsolute(options.stateDirectory)) throw new Error('ABSOLUTE_LOCAL_PATHS_REQUIRED');
+    if (options.environmentType !== undefined && !['local', 'cloud'].includes(options.environmentType)) throw new Error('INVALID_EXECUTION_ENVIRONMENT');
+    if (options.environmentType === 'cloud' && !options.cloud) throw new Error('CLOUD_CONFIGURATION_REQUIRED');
+    if (options.cloud && (options.environmentType !== 'cloud' || !isAbsolute(options.cloud.workspaceRoot) || !isAbsolute(options.cloud.snapshotRoot) ||
+      options.workspaceRoots.length !== 1 || resolve(options.workspaceRoots[0]!) !== resolve(options.cloud.workspaceRoot))) throw new Error('INVALID_CLOUD_CONFIGURATION');
+    if (options.handoff && (!isAbsolute(options.handoff.snapshotRoot) || options.environmentType === 'cloud')) throw new Error('INVALID_HANDOFF_CONFIGURATION');
     for (const value of [options.pollIntervalMs, options.heartbeatIntervalMs, options.retryMaxMs, options.requestTimeoutMs, options.cancelGraceMs, options.killGraceMs]) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 86_400_000)) throw new Error('INVALID_DAEMON_INTERVAL');
     }
@@ -93,8 +111,8 @@ export class DaemonRunner {
       const credentialPath = join(options.stateDirectory, 'device.json');
       let credential = await readDeviceCredential(credentialPath, this.client.baseUrl);
       const registration: DaemonRegistration = {
-        machineName: options.machineName ?? hostname(), environmentType: 'local',
-        capabilities: options.allowRuntime ?? ['codex', 'qwen'],
+        machineName: options.machineName ?? hostname(), environmentType: options.environmentType ?? 'local',
+        capabilities: [...(options.allowRuntime ?? ['codex', 'qwen']), ...(options.cloud ? ['cloud-session', 'container', 'snapshot-transfer', 'secret-lease'] : [])],
         workspaceRoots: await Promise.all(options.workspaceRoots.map(root => this.workspace.assertAllowed(root))),
         maxConcurrentSessions: 1, daemonVersion: '0.1.0',
       };
@@ -114,6 +132,25 @@ export class DaemonRunner {
       const device = credential;
       secrets.push(device.authToken);
       const outbox = await PersistentOutbox.open(join(options.stateDirectory, 'outbox.jsonl'), secrets);
+      if (options.handoff) this.sourceSnapshots = new LocalSnapshotStore({ root: options.handoff.snapshotRoot, workspaceRoots: registration.workspaceRoots });
+      if (options.cloud) {
+        const cloud = options.cloud;
+        this.cloudOptions = {
+          stateDirectory: join(options.stateDirectory, 'cloud'), workspaceRoot: cloud.workspaceRoot,
+          runtime: new DockerRuntime({ image: cloud.image, workspaceRoot: cloud.workspaceRoot, ownerId: device.daemonId, ...(cloud.network ? { network: cloud.network } : {}) }),
+          snapshots: new LocalSnapshotStore({ root: cloud.snapshotRoot, workspaceRoots: [cloud.workspaceRoot] }),
+          broker: new SecretBroker(async reference => reference.startsWith('keychain://') ? resolveCredential(reference) : undefined),
+          lifecycle: body => {
+            if (!this.active) throw new Error('CLOUD_ACTIVE_SESSION_REQUIRED');
+            return this.client.cloudLifecycle(device, this.active.dispatch.runId, body);
+          },
+          onProgress: progress => outbox.append({ daemonId: device.daemonId, runId: this.active!.dispatch.runId, progress: sanitizeProgress(progress, [device.authToken]) }),
+          initialSequence: 0, recoverSequence: runId => outbox.lastSequence(runId),
+          ...(options.localPolicy ? { localPolicy: options.localPolicy } : {}),
+        };
+        const recovered = await CloudExecutor.recover(this.cloudOptions);
+        if (recovered) this.trackCloud(recovered);
+      }
       while (!signal.aborted) {
         if (this.workerError) throw this.workerError;
         try {
@@ -133,7 +170,13 @@ export class DaemonRunner {
             // accepted=false 表示控制面已去重或终态已固定，HTTP 成功即可确认本地重放。
             await outbox.acknowledge(pending.progress.eventId);
           }
+          if (this.finishedCloud && !outbox.pending().length) {
+            await this.finishedCloud.cleanup();
+            this.finishedCloud = undefined;
+            this.active = undefined;
+          }
           if (!this.active && !outbox.pending().length) {
+            if (this.sourceSnapshots) await this.exportHandoffs(device, signal);
             const dispatch = await this.client.claim(device, signal);
             if (dispatch) await this.launch(dispatch, device, outbox, command, [script], env);
           }
@@ -152,6 +195,13 @@ export class DaemonRunner {
   }
 
   private async launch(input: RunDispatch, device: DeviceCredential, outbox: PersistentOutbox, command: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
+    if (this.cloudOptions) {
+      if (input.config?.daemonId !== device.daemonId || input.config.environmentType !== 'cloud' || !input.cloud ||
+        input.config.workspacePath !== '/workspace/session' || !(this.options.allowRuntime ?? ['codex', 'qwen']).includes(input.config.runtime)) throw new Error('INVALID_CLOUD_DISPATCH');
+      const executor = new CloudExecutor(input, { ...this.cloudOptions, initialSequence: outbox.lastSequence(input.runId) });
+      this.trackCloud(executor);
+      return;
+    }
     let dispatch: RunDispatch;
     try { dispatch = await this.validateDispatch(input, device); }
     catch {
@@ -170,6 +220,46 @@ export class DaemonRunner {
     });
     this.active = worker;
     void worker.done.then(() => { if (this.active === worker) this.active = undefined; }, error => { this.workerError = error; });
+  }
+
+  private trackCloud(executor: CloudExecutor): void {
+    this.active = executor;
+    void executor.done.then(() => { this.finishedCloud = executor; }, error => { this.workerError = error; });
+  }
+
+  private async exportHandoffs(device: DeviceCredential, signal: AbortSignal): Promise<void> {
+    const pending = await this.client.pendingHandoffs(device, signal);
+    for (const request of pending.requests) {
+      if (signal.aborted) return;
+      if (!/^[a-zA-Z0-9_-]{1,200}$/.test(request.id)) throw new Error('INVALID_HANDOFF_ID');
+      const path = join(this.options.stateDirectory, `handoff-${request.id}.json`);
+      let manifest;
+      try {
+        let file;
+        try { file = await openPrivateFile(path, constants.O_RDONLY); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        if (file) {
+          try { manifest = cloudSnapshotManifestSchema.parse(JSON.parse(await file.readFile('utf8'))); }
+          finally { await file.close(); }
+        } else {
+          const workspacePath = await this.workspace.assertAllowed(request.workspacePath);
+          const exported = await this.sourceSnapshots!.exportWorkspace(workspacePath);
+          manifest = cloudSnapshotManifestSchema.parse({ ...exported, checksum: exported.checksum.startsWith('sha256:') ? exported.checksum : `sha256:${exported.checksum}` });
+          const saved = await openPrivateFile(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+          try { await saved.writeFile(JSON.stringify(manifest)); await saved.sync(); }
+          finally { await saved.close(); }
+        }
+      } catch {
+        await this.client.failHandoff(device, request.id, 'HANDOFF_SNAPSHOT_FAILED', signal);
+        continue;
+      }
+      try { await this.client.acknowledgeSnapshot(device, request.id, manifest, signal); }
+      catch (error) {
+        // 目标容量或批准计划暂不可用时保留同一快照，下轮继续确认。
+        if (error instanceof DaemonHttpError && [400, 409].includes(error.status)) continue;
+        throw error;
+      }
+    }
   }
 
   private async validateDispatch(input: RunDispatch, device: DeviceCredential): Promise<RunDispatch> {
@@ -194,6 +284,7 @@ export class DaemonRunner {
         daemonId: config.daemonId, runtime: config.runtime, credentialRef: config.credentialRef,
         workspacePath: resolve(workspacePath), allowedTools: [...config.allowedTools], maxTurns: config.maxTurns, timeoutMs: config.timeoutMs,
         ...(config.modelRef === undefined ? {} : { modelRef: config.modelRef }),
+        ...(config.baseUrlRef === undefined ? {} : { baseUrlRef: config.baseUrlRef }),
         ...(this.options.localPolicy ? { localPolicy: structuredClone(this.options.localPolicy) } : {}),
       },
     };

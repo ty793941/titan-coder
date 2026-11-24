@@ -1,7 +1,9 @@
-import type { DaemonHeartbeat, DaemonRegistration, ProgressAck, RunDispatch, RunProgress } from '@titan/daemon-protocol';
+import type { CloudSnapshotManifest, DaemonHeartbeat, DaemonRegistration, ProgressAck, RunDispatch, RunProgress } from '@titan/daemon-protocol';
 
 export type DeviceCredential = { daemonId: string; authToken: string; baseUrl: string };
 export type RunControl = { cancelRequested: boolean; status: string };
+export type PendingHandoff = { id: string; sourceSessionId: string; sourceRunId: string; checkpointId: string; workspacePath: string };
+export type CloudLifecycle = { claimToken: string; status: 'creating' | 'starting' | 'running'; containerId?: string; consumeSecret?: boolean };
 
 export class DaemonTransportError extends Error {
   constructor() { super('DAEMON_TRANSPORT_ERROR'); }
@@ -49,6 +51,25 @@ export class DaemonClient {
     const control = await this.request(this.runPath(credential, runId, 'control'), 'GET', undefined, credential, signal) as RunControl;
     if (!control || typeof control.cancelRequested !== 'boolean' || typeof control.status !== 'string') throw new DaemonProtocolError('INVALID_RUN_CONTROL');
     return control;
+  }
+
+  async cloudLifecycle(credential: DeviceCredential, runId: string, body: CloudLifecycle, signal?: AbortSignal): Promise<unknown> {
+    return this.request(this.runPath(credential, runId, 'cloud'), 'POST', body, credential, signal);
+  }
+
+  async pendingHandoffs(credential: DeviceCredential, signal?: AbortSignal): Promise<{ requests: PendingHandoff[] }> {
+    const result = await this.request(`/api/daemons/${encodeURIComponent(credential.daemonId)}/handoffs/pending`, 'GET', undefined, credential, signal) as { requests: PendingHandoff[] };
+    if (!result || !Array.isArray(result.requests) || result.requests.length > 100 || result.requests.some(item => !item ||
+      [item.id, item.sourceSessionId, item.sourceRunId, item.checkpointId, item.workspacePath].some(value => typeof value !== 'string' || !value || value.length > 4096))) throw new DaemonProtocolError('INVALID_HANDOFF_RESPONSE');
+    return result;
+  }
+
+  async acknowledgeSnapshot(credential: DeviceCredential, id: string, manifest: Omit<CloudSnapshotManifest, 'checksum'> & { checksum: string }, signal?: AbortSignal): Promise<unknown> {
+    return this.request(`/api/daemons/${encodeURIComponent(credential.daemonId)}/handoffs/${encodeURIComponent(id)}/snapshot`, 'POST', { manifest, stopped: true }, credential, signal);
+  }
+
+  async failHandoff(credential: DeviceCredential, id: string, errorCode: 'HANDOFF_SNAPSHOT_FAILED' | 'HANDOFF_TRANSFER_FAILED' | 'HANDOFF_TARGET_UNAVAILABLE', signal?: AbortSignal): Promise<unknown> {
+    return this.request(`/api/daemons/${encodeURIComponent(credential.daemonId)}/handoffs/${encodeURIComponent(id)}/failure`, 'POST', { errorCode }, credential, signal);
   }
 
   private runPath(credential: DeviceCredential, runId: string, action: string): string {

@@ -97,6 +97,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@titan/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
       '@titan/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

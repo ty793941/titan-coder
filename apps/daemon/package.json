@@ -11,6 +11,7 @@
     "start": "node dist/cli.js"
   },
   "dependencies": {
+    "@titan/agent-runtime": "workspace:*",
     "@titan/contracts": "workspace:*",
     "@titan/daemon-protocol": "workspace:*"
   },
