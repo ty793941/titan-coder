@@ -1,10 +1,12 @@
 import { constants } from 'node:fs';
 import type { RunProgress } from '@titan/daemon-protocol';
+import { cloudProgressFenceSchema, type CloudProgressFence } from '@titan/contracts';
 import { openPrivateFile } from './private-state.js';
 import { sanitizeProgress } from './progress-safety.js';
 
 export type PendingProgress = { daemonId: string; runId: string; progress: RunProgress };
-type RecordEntry = { operation: 'append'; event: PendingProgress } | { operation: 'ack'; eventId: string };
+type RecordEntry = { operation: 'append'; event: PendingProgress } | { operation: 'ack'; eventId: string }
+  | { operation: 'discard'; eventId: string; fence: CloudProgressFence; occurredAt: string };
 
 export class PersistentOutbox {
   private readonly events = new Map<string, PendingProgress>();
@@ -53,6 +55,20 @@ export class PersistentOutbox {
     });
   }
 
+  discardFenced(eventId: string, fence: CloudProgressFence): Promise<void> {
+    return this.serialize(async () => {
+      const proof = this.validateFence(eventId, fence);
+      if (!this.acknowledged.has(eventId)) await this.persist({ operation: 'discard', eventId, fence: proof, occurredAt: new Date().toISOString() });
+    });
+  }
+
+  private validateFence(eventId: string, fence: CloudProgressFence): CloudProgressFence {
+    const proof = cloudProgressFenceSchema.parse(fence);
+    const event = this.events.get(eventId);
+    if (!event || proof.eventId !== eventId || proof.runId !== event.runId || proof.daemonId !== event.daemonId) throw new Error('OUTBOX_FENCE_MISMATCH');
+    return proof;
+  }
+
   private serialize(operation: () => Promise<void>): Promise<void> {
     const pending = this.chain.then(operation);
     this.chain = pending.catch(() => undefined);
@@ -71,6 +87,9 @@ export class PersistentOutbox {
       if (typeof record.event.daemonId !== 'string' || typeof record.event.runId !== 'string') throw new Error('INVALID_OUTBOX_RECORD');
       const progress = sanitizeProgress(record.event.progress, this.secrets);
       this.events.set(progress.eventId, { daemonId: record.event.daemonId, runId: record.event.runId, progress });
+    } else if (record.operation === 'discard' && typeof record.occurredAt === 'string') {
+      this.validateFence(record.eventId, record.fence);
+      this.acknowledged.add(record.eventId);
     } else if (record.operation === 'ack' && typeof record.eventId === 'string') this.acknowledged.add(record.eventId);
     else throw new Error('INVALID_OUTBOX_RECORD');
   }

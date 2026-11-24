@@ -1,4 +1,7 @@
 import { createServer, type Server } from 'node:http';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -9,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DaemonRunner, type DaemonRunnerOptions } from '../src/daemon-runner.js';
 import { DockerRuntime } from '../src/cloud/docker-runtime.js';
 import { LocalSnapshotStore } from '../src/cloud/snapshot-store.js';
+import { PersistentOutbox } from '../src/persistent-outbox.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/runtime-worker.cjs', import.meta.url));
 const cleanup: Array<() => Promise<void>> = [];
@@ -37,6 +41,8 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
   let revoked = false;
   let claimFailures = 0;
   let badProgressResponse = false;
+  const progressDenials = new Map<string, (progress: RunProgress) => Record<string, unknown>>();
+  const fenced = new Set<string>();
   const claimTimes: number[] = [];
   const server: Server = createServer(async (request, response) => {
     let content = '';
@@ -61,9 +67,12 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
       response.end(dispatch ? JSON.stringify(dispatch) : undefined);
       return;
     }
-    if (request.url?.endsWith('/control')) { response.end(JSON.stringify({ cancelRequested, status: 'running' })); return; }
+    const runId = request.url?.split('/runs/')[1]?.split('/')[0] ?? '';
+    if (request.url?.endsWith('/control')) { response.end(JSON.stringify(fenced.has(runId) ? { cancelRequested: true, status: 'reconnecting' } : { cancelRequested, status: 'running' })); return; }
     if (request.url?.endsWith('/progress')) {
       attempts.push(body);
+      const denial = progressDenials.get(runId);
+      if (denial) { response.statusCode = 403; response.end(JSON.stringify(denial(body))); return; }
       if (badProgressResponse) { response.end(JSON.stringify({ accepted: 'unknown' })); return; }
       if (offline) { request.socket.destroy(); return; }
       if (!events.some(event => event.eventId === body.eventId)) events.push(body);
@@ -100,6 +109,8 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
   };
   cleanup.push(async () => { for (const session of sessions) session.abort.abort(); await Promise.all(sessions.map(session => session.promise)); });
   return { root, workspace, dispatch, events, attempts, pending, options, start, claimTimes,
+    denyProgress: (runId: string, denial: (progress: RunProgress) => Record<string, unknown>) => { progressDenials.set(runId, denial); },
+    fence: (runId: string) => { fenced.add(runId); },
     failClaims: (count: number) => { claimFailures = count; },
     invalidProgressAck: () => { badProgressResponse = true; },
     offline: (value: boolean) => { offline = value; }, cancel: () => { cancelRequested = true; }, revoke: () => { revoked = true; },
@@ -108,6 +119,102 @@ async function harness(goal = 'complete', overrides: Partial<DaemonRunnerOptions
 }
 
 describe('DaemonRunner real HTTP and child IPC', () => {
+  it('discards only fenced cloud progress, waits for container stop, and continues heartbeats and claims across restart', async () => {
+    const h = await harness();
+    execFileSync('git', ['init', '--quiet', h.workspace]);
+    execFileSync('git', ['-C', h.workspace, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--quiet', '--allow-empty', '-m', 'fixture']);
+    const snapshotRoot = join(h.root, 'snapshots');
+    const snapshot = await new LocalSnapshotStore({ root: snapshotRoot, workspaceRoots: [h.workspace] }).exportWorkspace(h.workspace);
+    h.options.environmentType = 'cloud';
+    h.options.cloud = { image: 'titan-session:fixture', workspaceRoot: h.workspace, snapshotRoot };
+    Object.assign(h.dispatch.config, { environmentType: 'cloud', workspacePath: '/workspace/session', credentialRef: 'keychain://fixture' });
+    h.dispatch.cloud = { executionId: 'cloud-1', snapshot, secretLeaseId: 'lease-1', secretLeaseExpiresAt: new Date(Date.now() + 60000).toISOString() };
+    const second = structuredClone(h.dispatch);
+    Object.assign(second, { runId: 'run-2', sessionId: 'session-2', jobId: 'job-2' });
+    h.pending.push(second);
+    const handle = { id: 'a'.repeat(64), name: `titan-cloud-${'b'.repeat(40)}` };
+    let state: 'missing' | 'created' | 'running' | 'exited' = 'missing';
+    let allowStop!: () => void;
+    const stopGate = new Promise<void>(resolve => { allowStop = resolve; });
+    cleanup.push(async () => { allowStop(); });
+    vi.spyOn(DockerRuntime.prototype, 'create').mockImplementation(async () => { state = 'created'; return handle; });
+    vi.spyOn(DockerRuntime.prototype, 'find').mockImplementation(async () => state === 'missing' ? undefined : handle);
+    vi.spyOn(DockerRuntime.prototype, 'inspect').mockImplementation(async () => ({ state }));
+    const remove = vi.spyOn(DockerRuntime.prototype, 'remove').mockImplementation(async () => { expect(state).not.toBe('running'); state = 'missing'; });
+    const stop = vi.spyOn(DockerRuntime.prototype, 'stop').mockImplementation(async () => { await stopGate; state = 'exited'; });
+    vi.spyOn(DockerRuntime.prototype, 'start').mockImplementation(() => {
+      state = 'running';
+      const stream = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() }) as unknown as ChildProcessWithoutNullStreams;
+      stream.kill = () => { stream.stdout.end(); stream.stderr.end(); stream.emit('close', 0, null); return true; };
+      setImmediate(() => stream.stdout.write(`${JSON.stringify({ version: 1, type: 'progress', progress: {
+        eventId: 'stale-running', sequence: 1, claimToken: h.dispatch.claimToken, type: 'running', payload: {},
+      } })}\n`));
+      return stream;
+    });
+    h.offline(true);
+    let resolutions = 0;
+    const session = h.start({ credentialResolver: async () => ++resolutions === 1 ? 'private-test-key' : undefined });
+    await until(() => h.attempts.length > 0);
+    h.denyProgress('run-1', progress => ({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud',
+      daemonId: 'daemon-1', runId: 'run-1', eventId: progress.eventId, jobStatus: 'blocked', runStatus: 'reconnecting' } }));
+    h.fence('run-1');
+    h.offline(false);
+    await until(() => stop.mock.calls.length > 0 || session.errors.length > 0);
+    const heartbeats = h.heartbeats();
+    await until(() => h.heartbeats() > heartbeats || session.errors.length > 0, 500).catch(async () => {
+      allowStop();
+      await session.promise;
+      expect(session.errors).toEqual([]);
+    });
+    expect(session.errors).toEqual([]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(h.claimTimes).toHaveLength(1);
+    allowStop();
+    await until(() => h.events.some(event => event.type === 'waiting_input') || session.errors.length > 0);
+    expect(session.errors).toEqual([]);
+    await until(async () => JSON.parse(await readFile(join(h.options.stateDirectory, 'cloud', 'active.json'), 'utf8')) === null);
+    session.abort.abort(); await session.promise;
+    expect(h.claimTimes.length).toBeGreaterThan(1);
+    expect(h.events.map(event => event.type)).toEqual(['waiting_input']);
+    const path = join(h.options.stateDirectory, 'outbox.jsonl');
+    expect((await PersistentOutbox.open(path)).pending()).toEqual([]);
+    const records = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const discarded = records.filter(record => record.operation === 'discard');
+    expect(discarded.length).toBeGreaterThanOrEqual(2);
+    expect(discarded.every(record => record.fence.runId === 'run-1' && record.fence.reason === 'CLOUD_PROGRESS_FENCED')).toBe(true);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(remove).toHaveBeenCalledTimes(2);
+    const attempts = h.attempts.length;
+    const resumed = h.start();
+    const previousHeartbeats = h.heartbeats();
+    await until(() => h.heartbeats() > previousHeartbeats);
+    resumed.abort.abort(); await resumed.promise;
+    expect(resumed.errors).toEqual([]);
+    expect(h.attempts).toHaveLength(attempts);
+  });
+
+  it.each(['local', 'cloud', 'wrong-run', 'wrong-event', 'wrong-status', 'wrong-code'])('stops and retains progress for an untrusted 403: %s', async mode => {
+    const h = await harness();
+    if (mode !== 'local') {
+      h.options.environmentType = 'cloud';
+      h.options.cloud = { image: 'titan-session:fixture', workspaceRoot: h.workspace, snapshotRoot: join(h.root, 'snapshots') };
+      h.pending.length = 0;
+      const outbox = await PersistentOutbox.open(join(h.options.stateDirectory, 'outbox.jsonl'));
+      await outbox.append({ daemonId: 'daemon-1', runId: 'run-1', progress: { eventId: 'old-event', sequence: 1, claimToken: 'claim', type: 'completed', payload: {} } });
+    }
+    h.denyProgress('run-1', progress => ({ code: mode === 'wrong-code' ? 'VALIDATION_FAILED' : 'PERMISSION_DENIED', details: mode === 'cloud' ? {} : {
+      reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: 'daemon-1', runId: mode === 'wrong-run' ? 'other' : 'run-1',
+      eventId: mode === 'wrong-event' ? 'other' : progress.eventId, jobStatus: 'blocked', runStatus: mode === 'wrong-status' ? 'running' : 'reconnecting',
+    } }));
+    const session = h.start();
+    await until(() => session.errors.length > 0);
+    await session.promise;
+    expect(String(session.errors[0])).toContain('DAEMON_AUTH_REJECTED');
+    const path = join(h.options.stateDirectory, 'outbox.jsonl');
+    expect((await PersistentOutbox.open(path)).pending().length).toBeGreaterThan(0);
+    expect(await readFile(path, 'utf8')).not.toContain('"operation":"discard"');
+  });
+
   it('registers cloud capabilities and waits for a missing dependency-resolved credential without starting Docker', async () => {
     const h = await harness();
     execFileSync('git', ['init', '--quiet', h.workspace]);

@@ -34,4 +34,28 @@ describe('PersistentOutbox', () => {
     await recovered.acknowledge('event');
     expect((await PersistentOutbox.open(path)).pending()).toEqual([]);
   });
+
+  it('durably audits a fenced event discard without acknowledging another run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'titan-outbox-'));
+    const path = join(root, 'outbox.jsonl');
+    const outbox = await PersistentOutbox.open(path);
+    const event = { daemonId: 'daemon', runId: 'fenced-run', progress: { eventId: 'stale', sequence: 7, claimToken: 'claim', type: 'completed' as const, payload: {} } };
+    const other = { ...event, runId: 'other-run', progress: { ...event.progress, eventId: 'other' } };
+    await outbox.append(event); await outbox.append(other);
+    const fence = { reason: 'CLOUD_PROGRESS_FENCED' as const, environmentType: 'cloud' as const, daemonId: 'daemon', runId: 'fenced-run',
+      eventId: 'stale', jobStatus: 'blocked' as const, runStatus: 'reconnecting' as const };
+    await expect(outbox.discardFenced('stale', { ...fence, runId: 'other-run' })).rejects.toThrow('OUTBOX_FENCE_MISMATCH');
+    expect(outbox.pending()).toHaveLength(2);
+    await outbox.discardFenced('stale', fence);
+    await outbox.discardFenced('stale', fence);
+    const recovered = await PersistentOutbox.open(path);
+    expect(recovered.pending()).toEqual([other]);
+    expect(recovered.lastSequence('fenced-run')).toBe(7);
+    const records = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(records.filter(record => record.operation === 'discard')).toEqual([
+      { operation: 'discard', eventId: 'stale', fence, occurredAt: expect.any(String) },
+    ]);
+    expect(records.filter(record => record.operation === 'ack')).toEqual([]);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
 });

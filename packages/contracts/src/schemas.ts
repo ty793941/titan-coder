@@ -125,6 +125,17 @@ export const runProgressSchema = z.object({
   if (value.type === 'checkpoint' && !value.checkpoint) context.addIssue({ code: z.ZodIssueCode.custom, message: 'checkpoint is required', path: ['checkpoint'] });
 });
 
+export const cloudProgressFenceSchema = z.object({
+  reason: z.literal('CLOUD_PROGRESS_FENCED'),
+  environmentType: z.literal('cloud'),
+  daemonId: identifier,
+  runId: identifier,
+  eventId: identifier,
+  jobStatus: z.literal('blocked'),
+  runStatus: z.literal('reconnecting'),
+}).strict();
+export type CloudProgressFence = z.infer<typeof cloudProgressFenceSchema>;
+
 export const daemonRegistrationSchema = z.object({
   machineName: identifier,
   environmentType: z.enum(['local', 'cloud']),

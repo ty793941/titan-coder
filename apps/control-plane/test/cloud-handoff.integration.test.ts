@@ -76,7 +76,10 @@ describe('bounded cloud control plane', () => {
     const eventId = randomUUID();
     const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
     const body = { claimToken: f.dispatch.claimToken, eventId, sequence: 1, type, payload: {} };
-    await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    const denied = await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    const fence = { reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId: f.target.daemonId,
+      runId: f.dispatch.runId, eventId, jobStatus: 'blocked', runStatus: 'reconnecting' };
+    expect(denied.body).toMatchObject({ code: 'PERMISSION_DENIED', details: fence });
     expect((await api.get(`/api/sessions/${f.dispatch.sessionId}`).expect(200)).body.status).toBe('reconnecting');
     expect((await api.get(`/api/runs/${f.dispatch.runId}`).expect(200)).body).toMatchObject({ status: 'reconnecting', errorCode: 'CLOUD_WORKER_DISCONNECTED' });
     const job = await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
@@ -86,10 +89,39 @@ describe('bounded cloud control plane', () => {
     const execution = await api.db.selectFrom('cloud_execution').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
     expect(execution).toMatchObject({ lease_expires_at: null, error_code: 'CLOUD_WORKER_DISCONNECTED' });
     expect((await api.db.selectFrom('secret_lease').selectAll().where('id', '=', f.dispatch.cloud.secretLeaseId).executeTakeFirstOrThrow()).revoked_at).toBeTruthy();
-    await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    const replay = await api.post(path).set('Authorization', auth(f.target.authToken)).send(body).expect(403);
+    expect(replay.body).toMatchObject({ code: 'PERMISSION_DENIED', details: fence });
     const events = await api.db.selectFrom('event').innerJoin('outbox_event', 'event.event_id', 'outbox_event.event_id').select('event.event_type').where('event.run_id', '=', f.dispatch.runId).execute();
     expect(events.filter(event => event.event_type === 'cloud_execution.reconnecting')).toHaveLength(1);
     expect(events.some(event => event.event_type === `run.${type}`)).toBe(false);
+  });
+
+  it('does not label invalid local or live cloud claim tokens as fenced progress', async () => {
+    const f = await ready();
+    for (const [device, runId] of [[f.source, f.run.id], [f.target, f.dispatch.runId]] as const) {
+      const denied = await api.post(`/api/daemons/${device.daemonId}/runs/${runId}/progress`).set('Authorization', auth(device.authToken))
+        .send({ claimToken: 'wrong-token', eventId: randomUUID(), sequence: 1, type: 'completed', payload: {} }).expect(403);
+      expect(denied.body).toMatchObject({ code: 'PERMISSION_DENIED', details: {} });
+      expect(denied.body.details.reason).toBeUndefined();
+    }
+    const job = await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow();
+    expect(job.status).toBe('claimed');
+    expect(job.claim_token_hash).toBeTruthy();
+  });
+
+  it.each(['execution_job', 'cloud_execution'] as const)('commits a fence before rejecting direct progress with an expired %s lease', async table => {
+    const f = await ready();
+    await api.db.updateTable(table).set({ lease_expires_at: new Date(Date.now() - 1) }).where('run_id', '=', f.dispatch.runId).execute();
+    const eventId = randomUUID();
+    const path = `/api/daemons/${f.target.daemonId}/runs/${f.dispatch.runId}/progress`;
+    const denied = await api.post(path).set('Authorization', auth(f.target.authToken))
+      .send({ claimToken: f.dispatch.claimToken, eventId, sequence: 1, type: 'completed', payload: {} }).expect(403);
+    expect(denied.body).toMatchObject({ code: 'PERMISSION_DENIED', details: { reason: 'CLOUD_PROGRESS_FENCED',
+      daemonId: f.target.daemonId, runId: f.dispatch.runId, eventId, jobStatus: 'blocked', runStatus: 'reconnecting' } });
+    expect((await api.db.selectFrom('execution_job').selectAll().where('run_id', '=', f.dispatch.runId).executeTakeFirstOrThrow()))
+      .toMatchObject({ status: 'blocked', claim_token_hash: null, last_sequence: '0' });
+    expect(await api.db.selectFrom('execution_progress').selectAll().where('event_id', '=', eventId).execute()).toEqual([]);
+    expect((await api.get(`/api/runs/${f.dispatch.runId}`).expect(200)).body.status).toBe('reconnecting');
   });
 
   it('keeps local progress compatible with an old heartbeat while the job lease is valid', async () => {

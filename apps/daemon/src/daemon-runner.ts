@@ -165,10 +165,18 @@ export class DaemonRunner {
           const pending = outbox.pending()[0];
           if (pending) {
             if (pending.daemonId !== device.daemonId) throw new Error('OUTBOX_DEVICE_MISMATCH');
-            const ack = await this.client.progress(device, pending.runId, pending.progress, signal);
-            if (ack.cancelRequested && this.active?.dispatch.runId === pending.runId) this.active.cancel();
-            // accepted=false 表示控制面已去重或终态已固定，HTTP 成功即可确认本地重放。
-            await outbox.acknowledge(pending.progress.eventId);
+            try {
+              const ack = await this.client.progress(device, pending.runId, pending.progress, signal);
+              if (ack.cancelRequested && this.active?.dispatch.runId === pending.runId) this.active.cancel();
+              // accepted=false 表示控制面已去重或终态已固定，HTTP 成功即可确认本地重放。
+              await outbox.acknowledge(pending.progress.eventId);
+            } catch (error) {
+              if (!(error instanceof DaemonHttpError) || error.status !== 403 || options.environmentType !== 'cloud' || !error.fence ||
+                error.fence.daemonId !== device.daemonId || error.fence.runId !== pending.runId || error.fence.eventId !== pending.progress.eventId) throw error;
+              if (this.active instanceof CloudExecutor && this.active.dispatch.runId === pending.runId) this.active.cancel();
+              // 本地收束不代表控制面接受事件；私有日志保留逐事件的隔离依据。
+              await outbox.discardFenced(pending.progress.eventId, error.fence);
+            }
           }
           if (this.finishedCloud && !outbox.pending().length) {
             await this.finishedCloud.cleanup();

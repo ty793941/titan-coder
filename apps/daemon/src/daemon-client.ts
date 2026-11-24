@@ -1,4 +1,5 @@
 import type { CloudSnapshotManifest, DaemonHeartbeat, DaemonRegistration, ProgressAck, RunDispatch, RunProgress } from '@titan/daemon-protocol';
+import { cloudProgressFenceSchema, type CloudProgressFence } from '@titan/contracts';
 
 export type DeviceCredential = { daemonId: string; authToken: string; baseUrl: string };
 export type RunControl = { cancelRequested: boolean; status: string };
@@ -12,7 +13,7 @@ export class DaemonTransportError extends Error {
 export class DaemonProtocolError extends Error {}
 
 export class DaemonHttpError extends Error {
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly fence?: CloudProgressFence) {
     super(status === 401 || status === 403 ? 'DAEMON_AUTH_REJECTED' : `DAEMON_HTTP_${status}`);
   }
 }
@@ -86,8 +87,17 @@ export class DaemonClient {
         signal: AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(signal ? [signal] : [])]),
       });
     } catch { throw new DaemonTransportError(); }
-    if (!response.ok) { await response.body?.cancel(); throw new DaemonHttpError(response.status); }
+    if (!response.ok) {
+      // 仅保留经过契约校验的隔离证明，不把任意错误正文或敏感信息放入异常。
+      const body = await this.readResponse(response).catch(() => undefined) as { code?: unknown; details?: unknown } | undefined;
+      const fence = response.status === 403 && body?.code === 'PERMISSION_DENIED' ? cloudProgressFenceSchema.safeParse(body.details) : undefined;
+      throw new DaemonHttpError(response.status, fence?.success ? fence.data : undefined);
+    }
     if (response.status === 204) return undefined;
+    return this.readResponse(response);
+  }
+
+  private async readResponse(response: Response): Promise<unknown> {
     const reader = response.body?.getReader();
     if (!reader) return undefined;
     let size = 0;

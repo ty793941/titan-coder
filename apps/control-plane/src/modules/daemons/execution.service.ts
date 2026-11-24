@@ -161,11 +161,19 @@ export class ExecutionService {
       if (daemon.status === 'revoked') throw new DomainError('PERMISSION_DENIED', 'daemon is revoked');
       const job = await trx.selectFrom('execution_job').selectAll().where('run_id', '=', runId).where('daemon_id', '=', daemonId).forUpdate().executeTakeFirst();
       if (!job) throw new DomainError('RESOURCE_NOT_FOUND', 'execution job was not found');
-      if (!sameToken(claimToken, job.claim_token_hash)) throw new DomainError('PERMISSION_DENIED', 'invalid claim token');
       const run = await trx.selectFrom('run').selectAll().where('id', '=', runId).forUpdate().executeTakeFirstOrThrow();
-      if (executionConfigSchema.parse(job.config).environmentType === 'cloud' && daemonStatus(daemon) !== 'ready') {
+      const isCloud = executionConfigSchema.parse(job.config).environmentType === 'cloud';
+      const fenced = () => new DomainError('PERMISSION_DENIED', 'cloud progress is fenced', {
+        reason: 'CLOUD_PROGRESS_FENCED', environmentType: 'cloud', daemonId, runId, eventId: input.eventId,
+        jobStatus: 'blocked', runStatus: 'reconnecting',
+      });
+      if (isCloud && job.status === 'blocked' && job.cancel_requested && job.claim_token_hash === null && job.lease_expires_at === null &&
+        run.status === 'reconnecting' && run.error_code === 'CLOUD_WORKER_DISCONNECTED') return fenced();
+      if (!sameToken(claimToken, job.claim_token_hash)) throw new DomainError('PERMISSION_DENIED', 'invalid claim token');
+      if (isCloud && daemonStatus(daemon) !== 'ready') {
         await this.cloud.disconnect(trx, runId);
         // 先提交隔离事实，再在事务外返回拒绝，避免异常回滚使旧领取证明继续有效。
+        if (job.status === 'claimed' && !terminal.has(run.status)) return fenced();
         return new DomainError('PERMISSION_DENIED', 'cloud daemon heartbeat is not ready');
       }
       const context = await trx.selectFrom('session').innerJoin('task', 'task.id', 'session.task_id')
@@ -179,11 +187,14 @@ export class ExecutionService {
       }
       if (run.status === 'paused') return { accepted: false, status: 'paused', cancelRequested: true };
       if (terminal.has(run.status)) return ack(false);
-      if (!job.lease_expires_at || job.lease_expires_at.getTime() <= Date.now() || job.status !== 'claimed') throw new DomainError('PERMISSION_DENIED', 'claim lease expired');
-      if (executionConfigSchema.parse(job.config).environmentType === 'cloud') {
+      if (isCloud && job.status === 'claimed') {
         const execution = await trx.selectFrom('cloud_execution').select('lease_expires_at').where('run_id', '=', runId).executeTakeFirstOrThrow();
-        if (!execution.lease_expires_at || execution.lease_expires_at.getTime() <= Date.now()) throw new DomainError('PERMISSION_DENIED', 'cloud lease expired');
+        if (!job.lease_expires_at || job.lease_expires_at.getTime() <= Date.now() || !execution.lease_expires_at || execution.lease_expires_at.getTime() <= Date.now()) {
+          await this.cloud.disconnect(trx, runId);
+          return fenced();
+        }
       }
+      if (!job.lease_expires_at || job.lease_expires_at.getTime() <= Date.now() || job.status !== 'claimed') throw new DomainError('PERMISSION_DENIED', 'claim lease expired');
       if (input.sequence !== Number(job.last_sequence) + 1) throw new DomainError('EVENT_SEQUENCE_GAP', 'progress sequence must be contiguous');
       await trx.insertInto('execution_progress').values({ event_id: input.eventId, job_id: job.id, sequence: input.sequence, request_hash: requestHash }).execute();
       if (checkpoint) {
