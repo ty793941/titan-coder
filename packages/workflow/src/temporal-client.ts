@@ -46,6 +46,11 @@ export type TemporalClientOptions = {
   taskQueue?: string;
 };
 
+export type TemporalClientTestHooks = {
+  beforeScheduleCreate?: (scheduleId: string) => Promise<void>;
+  beforeScheduleUpdate?: (scheduleId: string) => Promise<void>;
+};
+
 export async function connectTemporalClient(options: TemporalClientOptions): Promise<TemporalOrchestrationClient> {
   try {
     const connection = await Connection.connect({ address: options.address, connectTimeout: '5 seconds' });
@@ -54,6 +59,15 @@ export async function connectTemporalClient(options: TemporalClientOptions): Pro
   } catch {
     throw new TemporalClientError('DAEMON_UNAVAILABLE', true);
   }
+}
+
+export function createTemporalClientForTest(
+  client: Client,
+  connection: Connection,
+  taskQueue: string,
+  hooks: TemporalClientTestHooks = {},
+): TemporalOrchestrationClient {
+  return new TemporalClientAdapter(client, connection, taskQueue, hooks);
 }
 
 export function backgroundWorkflowId(jobId: string): string {
@@ -68,6 +82,7 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
     private readonly client: Client,
     private readonly connection: Connection,
     private readonly taskQueue: string,
+    private readonly testHooks: TemporalClientTestHooks = {},
   ) {}
 
   async startBackgroundJob(input: JobInput): Promise<void> {
@@ -119,6 +134,7 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
     }
     const definition = makeScheduleOptions(schedule, scheduleId, this.taskQueue);
     try {
+      await this.runTestHook(this.testHooks.beforeScheduleCreate, scheduleId);
       await this.withDeadline(() => this.client.schedule.create(definition));
     } catch (error) {
       if (!(error instanceof ScheduleAlreadyRunning)) throw toTemporalError(error);
@@ -132,6 +148,7 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
       }
       if (!sameScheduleMemo(description.memo, schedule)) throw new TemporalClientError('VERSION_CONFLICT', false);
       try {
+        await this.runTestHook(this.testHooks.beforeScheduleUpdate, scheduleId);
         await this.withDeadline(() => handle.update(() => ({
           spec: definition.spec,
           action: definition.action,
@@ -142,7 +159,12 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
         throw toTemporalError(updateError);
       }
     }
+    if (await this.hasNewerSchedule(schedule)) {
+      await this.pauseSchedule(scheduleId);
+      return;
+    }
     await pausePreviousScheduleVersions(this.client, schedule, scheduleId, operation => this.withDeadline(operation));
+    if (await this.hasNewerSchedule(schedule)) await this.pauseSchedule(scheduleId);
   }
 
   async close(): Promise<void> {
@@ -197,6 +219,10 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
 
   private withDeadline<T>(operation: () => Promise<T>): Promise<T> {
     return this.connection.withDeadline(Date.now() + TEMPORAL_RPC_TIMEOUT_MS, operation);
+  }
+
+  private async runTestHook(hook: ((scheduleId: string) => Promise<void>) | undefined, scheduleId: string): Promise<void> {
+    if (hook) await this.withDeadline(() => hook(scheduleId));
   }
 }
 
