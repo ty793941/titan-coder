@@ -17,9 +17,11 @@ import type {
   JobInput,
   JobObservation,
   OrchestrationActivities,
+  FailJobInput,
   ScheduleOccurrenceInput,
   ScheduleOccurrenceResult,
 } from './types.js';
+import { SAFE_ERROR_CODES, isSafeErrorCode } from './types.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
@@ -27,19 +29,6 @@ const MAX_ERROR_JSON_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_BEARER_BYTES = 4 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
-const SAFE_ERROR_CODES = new Set<ErrorCode>([
-  'VALIDATION_FAILED', 'RESOURCE_NOT_FOUND', 'VERSION_CONFLICT', 'IDEMPOTENCY_CONFLICT',
-  'INVALID_STATE_TRANSITION', 'TASK_PLAN_REQUIRED', 'PLAN_HASH_STALE', 'PERMISSION_DENIED',
-  'APPROVAL_REQUIRED', 'TOOL_INPUT_INVALID', 'TOOL_BLOCKED_BY_HOOK', 'TOOL_EXECUTION_FAILED',
-  'TOOL_TIMEOUT', 'DAEMON_UNAVAILABLE', 'WORKSPACE_CONFLICT', 'CHECKPOINT_NOT_FOUND',
-  'RUNTIME_ADAPTER_UNAVAILABLE', 'EVENT_SEQUENCE_GAP', 'EXECUTION_LEASE_EXPIRED',
-  'CLOUD_SECRET_LEASE_EXPIRED', 'CLOUD_SECRET_CONSUMED', 'CLOUD_WORKER_DISCONNECTED',
-  'CLOUD_RUNTIME_WAITING_INPUT', 'HANDOFF_CHECKPOINT_INVALID', 'HANDOFF_TARGET_UNAVAILABLE',
-  'HANDOFF_SNAPSHOT_FAILED', 'HANDOFF_TRANSFER_FAILED', 'WORKFLOW_COMMAND_LEASE_EXPIRED',
-  'WORKFLOW_COMMAND_FAILED', 'BACKGROUND_JOB_EXPIRED', 'SCHEDULE_DISABLED',
-  'SCHEDULE_DEFINITION_SUPERSEDED', 'SCHEDULE_MAX_RUNS_REACHED', 'SCHEDULE_OVERLAP',
-  'SCHEDULE_OUTSIDE_WINDOW', 'SCHEDULE_CATCHUP_SKIPPED',
-]);
 const RETRYABLE_ERROR_CODES = new Set<ErrorCode>([
   'DAEMON_UNAVAILABLE', 'TOOL_TIMEOUT', 'RUNTIME_ADAPTER_UNAVAILABLE', 'HANDOFF_TARGET_UNAVAILABLE',
 ]);
@@ -152,6 +141,15 @@ export class ControlPlaneClient implements OrchestrationActivities {
     const value = await this.requestJson(`api/internal/workflow/jobs/${encodeId(input.jobId)}/cancel`, {
       method: 'POST',
       body: JSON.stringify({ reason: input.reason }),
+    });
+    return toJobObservation(parseContract(jobObservationSchema, value));
+  }
+
+  async failJob(input: FailJobInput): Promise<JobObservation> {
+    const errorCode = validateSafeErrorCode(input.errorCode);
+    const value = await this.requestJson(`api/internal/workflow/jobs/${encodeId(input.jobId)}/fail`, {
+      method: 'POST',
+      body: JSON.stringify({ errorCode }),
     });
     return toJobObservation(parseContract(jobObservationSchema, value));
   }
@@ -302,10 +300,15 @@ async function readSafeErrorCode(response: Response): Promise<ErrorCode | undefi
     const value = JSON.parse(text) as unknown;
     if (!value || typeof value !== 'object' || !('code' in value)) return undefined;
     const code = (value as { code?: unknown }).code;
-    return typeof code === 'string' && SAFE_ERROR_CODES.has(code as ErrorCode) ? code as ErrorCode : undefined;
+    return isSafeErrorCode(code) ? code : undefined;
   } catch {
     return undefined;
   }
+}
+
+function validateSafeErrorCode(value: ErrorCode): ErrorCode {
+  if (!SAFE_ERROR_CODES.has(value)) throw new WorkflowClientError('VALIDATION_FAILED', false);
+  return value;
 }
 
 async function readJson(response: Response): Promise<unknown> {

@@ -57,6 +57,7 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
       dispatchJob: (input) => runSafeActivity(() => controlPlaneClient.dispatchJob(input)),
       observeJob: (input) => runSafeActivity(() => controlPlaneClient.observeJob(input)),
       cancelJob: (input) => runSafeActivity(() => controlPlaneClient.cancelJob(input)),
+      failJob: (input) => runSafeActivity(() => controlPlaneClient.failJob(input)),
       scheduleOccurrence: (input) => runSafeActivity(() => controlPlaneClient.scheduleOccurrence(input)),
     };
     worker = await Worker.create({
