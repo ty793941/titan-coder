@@ -23,9 +23,26 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_ERROR_JSON_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_BEARER_BYTES = 4 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
+const SAFE_ERROR_CODES = new Set<ErrorCode>([
+  'VALIDATION_FAILED', 'RESOURCE_NOT_FOUND', 'VERSION_CONFLICT', 'IDEMPOTENCY_CONFLICT',
+  'INVALID_STATE_TRANSITION', 'TASK_PLAN_REQUIRED', 'PLAN_HASH_STALE', 'PERMISSION_DENIED',
+  'APPROVAL_REQUIRED', 'TOOL_INPUT_INVALID', 'TOOL_BLOCKED_BY_HOOK', 'TOOL_EXECUTION_FAILED',
+  'TOOL_TIMEOUT', 'DAEMON_UNAVAILABLE', 'WORKSPACE_CONFLICT', 'CHECKPOINT_NOT_FOUND',
+  'RUNTIME_ADAPTER_UNAVAILABLE', 'EVENT_SEQUENCE_GAP', 'EXECUTION_LEASE_EXPIRED',
+  'CLOUD_SECRET_LEASE_EXPIRED', 'CLOUD_SECRET_CONSUMED', 'CLOUD_WORKER_DISCONNECTED',
+  'CLOUD_RUNTIME_WAITING_INPUT', 'HANDOFF_CHECKPOINT_INVALID', 'HANDOFF_TARGET_UNAVAILABLE',
+  'HANDOFF_SNAPSHOT_FAILED', 'HANDOFF_TRANSFER_FAILED', 'WORKFLOW_COMMAND_LEASE_EXPIRED',
+  'WORKFLOW_COMMAND_FAILED', 'BACKGROUND_JOB_EXPIRED', 'SCHEDULE_DISABLED',
+  'SCHEDULE_DEFINITION_SUPERSEDED', 'SCHEDULE_MAX_RUNS_REACHED', 'SCHEDULE_OVERLAP',
+  'SCHEDULE_OUTSIDE_WINDOW', 'SCHEDULE_CATCHUP_SKIPPED',
+]);
+const RETRYABLE_ERROR_CODES = new Set<ErrorCode>([
+  'DAEMON_UNAVAILABLE', 'TOOL_TIMEOUT', 'RUNTIME_ADAPTER_UNAVAILABLE', 'HANDOFF_TARGET_UNAVAILABLE',
+]);
 
 export type WorkflowBearerSource = {
   readKeychain?: (service: string) => Promise<string>;
@@ -172,7 +189,11 @@ export class ControlPlaneClient implements OrchestrationActivities {
         redirect: 'error',
         signal: controller.signal,
       });
-      if (response.status !== 204 && (response.status < 200 || response.status >= 300)) throw httpStatusError(response.status);
+      if (response.status !== 204 && (response.status < 200 || response.status >= 300)) {
+        if (response.status === 401 || response.status === 403) throw httpStatusError(response.status);
+        const code = await readSafeErrorCode(response);
+        throw code ? new WorkflowClientError(code, RETRYABLE_ERROR_CODES.has(code)) : httpStatusError(response.status);
+      }
       if (consume) return await consume(response);
       return response as T;
     } catch (error) {
@@ -258,6 +279,33 @@ function httpStatusError(status: number): WorkflowClientError {
   if (status === 404) return new WorkflowClientError('RESOURCE_NOT_FOUND', false);
   if (status === 409) return new WorkflowClientError('VERSION_CONFLICT', false);
   return new WorkflowClientError('WORKFLOW_COMMAND_FAILED', false);
+}
+
+async function readSafeErrorCode(response: Response): Promise<ErrorCode | undefined> {
+  const length = response.headers.get('content-length');
+  if (length && Number(length) > MAX_ERROR_JSON_BYTES) return undefined;
+  if (!response.body) return undefined;
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let text = '';
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_ERROR_JSON_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      text += new TextDecoder().decode(chunk.value, { stream: true });
+    }
+    const value = JSON.parse(text) as unknown;
+    if (!value || typeof value !== 'object' || !('code' in value)) return undefined;
+    const code = (value as { code?: unknown }).code;
+    return typeof code === 'string' && SAFE_ERROR_CODES.has(code as ErrorCode) ? code as ErrorCode : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {

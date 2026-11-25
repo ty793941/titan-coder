@@ -92,6 +92,31 @@ describe('ControlPlaneClient', () => {
     });
   });
 
+  it('extracts only a whitelisted retryable code from a bounded error response', async () => {
+    const maliciousMessage = 'do-not-copy-this-message';
+    const maliciousDetails = 'do-not-copy-these-details';
+    const baseUrl = await listen((_request, response) => {
+      response.statusCode = 400;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({
+        code: 'DAEMON_UNAVAILABLE',
+        message: maliciousMessage,
+        details: { secret: maliciousDetails },
+        retryable: false,
+      }));
+    });
+    const client = new ControlPlaneClient({ baseUrl, bearer: 'workflow-secret-1' });
+
+    await expect(client.observeJob({ jobId: 'job_1', workflowVersion: 1 })).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(WorkflowClientError);
+      expect(error).toMatchObject({ code: 'DAEMON_UNAVAILABLE', retryable: true });
+      expect((error as Error).message).toBe('DAEMON_UNAVAILABLE');
+      expect((error as Error).message).not.toContain(maliciousMessage);
+      expect((error as Error).message).not.toContain(maliciousDetails);
+      return true;
+    });
+  });
+
   it('bounds JSON response size at two MiB', async () => {
     const baseUrl = await listen((_request, response) => {
       response.setHeader('content-type', 'application/json');
