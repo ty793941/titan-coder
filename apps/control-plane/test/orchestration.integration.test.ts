@@ -733,3 +733,49 @@ it.each(['session', 'execution_schedule'] as const)('defers exhausted schedule c
   await rawInternal('/commands/claim', { workerId: 'worker_test' });
   expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('blocked');
 });
+
+it('locks an observed execution job and Run before its Session while daemon progress holds the Run', async () => {
+  const f = await fixture();
+  const run = (await request(`/sessions/${f.session.id}/runs`, { idempotencyKey: randomUUID() })).body;
+  let observation: ReturnType<typeof request> | undefined;
+  const result = await db.transaction().execute(async trx => {
+    const backend = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(trx);
+    await trx.selectFrom('execution_job').select('id').where('run_id', '=', run.id).forUpdate().execute();
+    await trx.selectFrom('run').select('id').where('id', '=', run.id).forUpdate().execute();
+    observation = request(`/sessions/${f.session.id}/background-jobs`, { ...f.jobInput, kind: 'observe', runId: run.id });
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const waiting = await admin.query('SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))', [backend.rows[0]!.pid]);
+      if (waiting.rows.length) { blocked = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(blocked).toBe(true);
+    await trx.updateTable('session').set({ status: 'running' }).where('id', '=', f.session.id).execute();
+    return 'committed';
+  }).catch(error => error.code);
+  expect(result).toBe('committed');
+  expect((await observation!).status).toBe(201);
+});
+
+it.each(['deadline', 'explicit_cancel', 'internal_expiry'] as const)('honors %s after workflow failure while retaining the failed orchestration result', async mode => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  await claimTarget(job.jobId);
+  const run = (await rawInternal(`/jobs/${job.jobId}/dispatch`, {})).body;
+  await db.updateTable('run').set({ status: 'running' }).where('id', '=', run.runId).execute();
+  await db.updateTable('session').set({ status: 'running' }).where('id', '=', f.session.id).execute();
+  expect((await rawInternal(`/jobs/${job.jobId}/fail`, { errorCode: 'WORKFLOW_COMMAND_FAILED' })).body.status).toBe('failed');
+  expect(await db.selectFrom('run').select('status').where('id', '=', run.runId).executeTakeFirstOrThrow()).toEqual({ status: 'running' });
+  if (mode !== 'explicit_cancel') await db.updateTable('background_job').set({ deadline_at: new Date(Date.now() - 1) }).where('id', '=', job.jobId).execute();
+  const cancelled = mode === 'explicit_cancel' ? await request(`/background-jobs/${job.jobId}/cancel`, {})
+    : mode === 'internal_expiry' ? await rawInternal(`/jobs/${job.jobId}/cancel`, { reason: 'expired' }) : await request(`/background-jobs/${job.jobId}`);
+  expect(cancelled.status).toBe(200);
+  const view = (await request(`/background-jobs/${job.jobId}`)).body;
+  expect(view).toMatchObject({ status: 'failed', cancelRequested: true, errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  expect(await db.selectFrom('run').select('status').where('id', '=', run.runId).executeTakeFirstOrThrow()).toEqual({ status: 'cancelled' });
+  expect(await db.selectFrom('execution_job').select('cancel_requested').where('run_id', '=', run.runId).executeTakeFirstOrThrow()).toEqual({ cancel_requested: true });
+  await request(`/background-jobs/${job.jobId}/cancel`, {});
+  expect((await request(`/background-jobs/${job.jobId}`)).body).toEqual(view);
+  expect(await db.selectFrom('event').select('event_id').where('run_id', '=', run.runId).where('event_type', '=', 'run.cancelled').execute()).toHaveLength(1);
+  expect(await db.selectFrom('event').select('event_id').where('session_id', '=', f.session.id).where('event_type', '=', 'background_job.cancel_requested').execute()).toHaveLength(1);
+});

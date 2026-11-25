@@ -25,6 +25,12 @@ export class BackgroundJobsService {
   async create(sessionId: string, input: unknown) {
     const parsed = backgroundJobCreateRequestSchema.parse(input);
     return this.database.db.transaction().execute(async trx => {
+      if (parsed.kind === 'observe') {
+        // INSERT 的 Run 外键也会取锁，必须先遵循 Daemon 的 execution_job→Run→Session 顺序。
+        await trx.selectFrom('execution_job').select('id').where('run_id', '=', parsed.runId!).forUpdate().execute();
+        const run = await trx.selectFrom('run').select('session_id').where('id', '=', parsed.runId!).forUpdate().executeTakeFirst();
+        if (!run || run.session_id !== sessionId) throw new DomainError('VALIDATION_FAILED', 'observed run must belong to the same session');
+      }
       const session = await lockSession(trx, sessionId);
       const scope = `session:${sessionId}:background:create`;
       const previous = await this.idempotency.read(trx, scope, parsed.idempotencyKey, parsed);
@@ -151,7 +157,7 @@ export class BackgroundJobsService {
       const { row } = await this.lock(trx, id);
       if (workerId !== undefined) requireAssignedWorker(row.worker_id, workerId);
       const current = await this.refresh(trx, row);
-      if (terminal.includes(current.status)) return;
+      if (current.cancel_requested || (terminal.includes(current.status) && !(current.status === 'failed' && current.run_id))) return;
       if (reason === 'expired' && current.deadline_at.getTime() > Date.now()) throw new DomainError('INVALID_STATE_TRANSITION', 'job has not reached its persisted deadline');
       await this.cancelLocked(trx, current, reason, actor);
       if (enqueue) await this.commands.enqueue(trx, 'cancel_job', id);
@@ -195,13 +201,13 @@ export class BackgroundJobsService {
   }
 
   private async refresh(trx: Transaction<Database>, row: Selectable<BackgroundJobTable>) {
-    if (terminal.includes(row.status) || row.cancel_requested) return row;
+    if (row.cancel_requested || (terminal.includes(row.status) && !(row.status === 'failed' && row.run_id))) return row;
     if (row.deadline_at.getTime() <= Date.now()) {
       const updated = await this.cancelLocked(trx, row, 'expired');
       await this.commands.enqueue(trx, 'cancel_job', row.id);
       return updated;
     }
-    if (!row.run_id) return row;
+    if (!row.run_id || row.status === 'failed') return row;
     const run = await trx.selectFrom('run').select(['status', 'error_code']).where('id', '=', row.run_id).executeTakeFirstOrThrow();
     const status = ['queued', 'starting'].includes(run.status) ? 'dispatching' : run.status === 'paused' ? 'waiting_input' : run.status;
     const safe = orchestrationErrorCodeSchema.safeParse(run.error_code);
@@ -215,7 +221,9 @@ export class BackgroundJobsService {
 
   private async cancelLocked(trx: Transaction<Database>, row: Selectable<BackgroundJobTable>, reason: 'cancelled' | 'expired', actor: RunCancellationActor = { type: 'system', id: 'control-plane' }) {
     if (row.run_id) await this.runs.cancelInTransaction(trx, row.run_id, actor);
-    const updated = await trx.updateTable('background_job').set({ status: reason, cancel_requested: true, error_code: reason === 'expired' ? 'BACKGROUND_JOB_EXPIRED' : null, version: row.version + 1 }).where('id', '=', row.id).returningAll().executeTakeFirstOrThrow();
+    const updated = await trx.updateTable('background_job').set({ status: row.status === 'failed' ? 'failed' : reason, cancel_requested: true,
+      error_code: row.status === 'failed' ? row.error_code : reason === 'expired' ? 'BACKGROUND_JOB_EXPIRED' : null,
+      version: row.version + 1 }).where('id', '=', row.id).returningAll().executeTakeFirstOrThrow();
     await this.event(trx, updated, 'background_job.cancel_requested', actor);
     return updated;
   }
