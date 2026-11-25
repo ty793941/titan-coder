@@ -666,3 +666,70 @@ it.each(['job', 'schedule', 'exhausted_job'] as const)('skips a locked %s domain
     expect((await claimTarget(target)).targetId).toBe(target);
   }
 });
+
+it.each(['permanent', 'retry_exhausted', 'lease_exhausted'] as const)('blocks the current schedule on %s sync failure and requires a new admin version to recover', async mode => {
+  const f = await fixture();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  const command = await claimTarget(schedule.id);
+  const occurrence = { definitionVersion: 2, occurrenceId: `titan/sync-failure/${randomUUID()}`, scheduledAt: new Date().toISOString() };
+  const admitted = (await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).body;
+  expect(admitted.status).toBe('created');
+  if (mode !== 'permanent') await db.updateTable('workflow_command').set({ attempts: 10, ...(mode === 'lease_exhausted' ? { lease_expires_at: new Date(Date.now() - 1) } : {}) }).where('id', '=', command.id).execute();
+  if (mode === 'lease_exhausted') await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  else expect((await rawInternal(`/commands/${command.id}/retry`, { claimToken: command.claimToken, retryable: mode !== 'permanent', errorCode: 'TOOL_EXECUTION_FAILED' })).status).toBe(204);
+  expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ version: 2, syncStatus: 'blocked', runCount: 0 });
+  expect(await db.selectFrom('workflow_command').select('status').where('id', '=', command.id).executeTakeFirstOrThrow()).toEqual({ status: 'failed' });
+  const failures = await db.selectFrom('event').select(['event_id', 'payload']).where('session_id', '=', f.session.id).where('event_type', '=', 'schedule.sync_failed').execute();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]!.payload).toMatchObject({ scheduleId: schedule.id, version: 2, errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  expect((await rawInternal(`/jobs/${admitted.jobId}/dispatch`, {})).body.status).toBe('cancelled');
+  expect((await rawInternal(`/schedules/${schedule.id}/occurrences`, { ...occurrence, occurrenceId: `titan/blocked/${randomUUID()}`, scheduledAt: new Date().toISOString() })).body).toEqual({ status: 'skipped' });
+  expect(await db.selectFrom('run').selectAll().where('session_id', '=', f.session.id).execute()).toEqual([]);
+  expect((await rawInternal(`/commands/${command.id}/complete`, { claimToken: command.claimToken })).status).toBe(409);
+  await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  expect(await db.selectFrom('event').select('event_id').where('session_id', '=', f.session.id).where('event_type', '=', 'schedule.sync_failed').execute()).toEqual(failures.map(row => ({ event_id: row.event_id })));
+  const enabled = await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 2 });
+  expect(enabled.body).toMatchObject({ version: 3, syncStatus: 'pending_sync', enabled: true });
+  const recovery = await claimTarget(schedule.id);
+  expect(recovery.definitionVersion).toBe(3);
+  await rawInternal(`/commands/${recovery.id}/complete`, { claimToken: recovery.claimToken });
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('active');
+});
+
+it.each(['permanent', 'lease_exhausted'] as const)('does not block a newer schedule version on old %s sync failure', async mode => {
+  const f = await fixture();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  const old = await claimTarget(schedule.id);
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  if (mode === 'lease_exhausted') {
+    await db.updateTable('workflow_command').set({ attempts: 10, lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', old.id).execute();
+    await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  } else expect((await rawInternal(`/commands/${old.id}/retry`, { claimToken: old.claimToken, retryable: false, errorCode: 'TOOL_EXECUTION_FAILED' })).status).toBe(204);
+  expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ version: 2, syncStatus: 'pending_sync', enabled: true });
+  expect(await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).where('event_type', '=', 'schedule.sync_failed').execute()).toEqual([]);
+});
+
+it.each(['session', 'execution_schedule'] as const)('defers exhausted schedule cleanup under a locked %s without starving other targets', async table => {
+  const f = await fixture(); const g = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  const command = await claimTarget(schedule.id);
+  await db.updateTable('workflow_command').set({ attempts: 10, lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', command.id).execute();
+  const other = (await request(`/sessions/${g.session.id}/background-jobs`, g.jobInput)).body;
+  let claim: ReturnType<typeof rawInternal> | undefined;
+  let returnedWhileLocked = false;
+  await db.transaction().execute(async trx => {
+    await trx.selectFrom(table).select('id').where('id', '=', table === 'session' ? f.session.id : schedule.id).forUpdate().execute();
+    claim = rawInternal('/commands/claim', { workerId: 'worker_test' });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([claim.then(() => { returnedWhileLocked = true; }), new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
+    clearTimeout(timer);
+  });
+  expect(returnedWhileLocked).toBe(true);
+  expect((await claim!).body.targetId).toBe(other.jobId);
+  expect(await db.selectFrom('workflow_command').select('status').where('id', '=', command.id).executeTakeFirstOrThrow()).toEqual({ status: 'claimed' });
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('pending_sync');
+  await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  expect((await request(`/schedules/${schedule.id}`)).body.syncStatus).toBe('blocked');
+});

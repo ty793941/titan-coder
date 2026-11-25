@@ -335,6 +335,8 @@ CREATE TABLE IF NOT EXISTS background_job (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((schedule_id IS NULL) = (definition_version IS NULL))
 );
+ALTER TABLE background_job ADD COLUMN IF NOT EXISTS worker_id TEXT;
+ALTER TABLE execution_schedule ADD COLUMN IF NOT EXISTS worker_id TEXT;
 CREATE TABLE IF NOT EXISTS workflow_command (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('start_job','cancel_job','sync_schedule')),

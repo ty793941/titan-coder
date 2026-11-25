@@ -100,9 +100,13 @@ Temporal 使用 Schedule API，不使用旧 `cronSchedule` 选项。时间计算
 
 Schedule 在 PostgreSQL 与 Temporal 中的更新同样经过命令 Outbox；控制面返回 `pending_sync` 与实际启用状态，只有同步确认后才报告 `active`。业务派发始终以 PostgreSQL 授权状态为准。
 
+当前版本的 `sync_schedule` 永久失败、重试十次耗尽或第十次投递租约过期后，控制面在同一事务中将命令标记失败、调度标记 `sync_status=blocked`，并写入 `schedule.sync_failed` 事件，固定错误码为 `WORKFLOW_COMMAND_FAILED`。保留管理员期望的 `enabled` 和定义版本，便于明确表达同步尚未成功；接纳触发及派发前都拒绝 `blocked`，所以 Temporal 中尚存的旧 Action 也不能创建新 Run，已执行 Run 不受影响。只有版本仍匹配才阻塞，旧版本失败不能覆盖新定义。管理员通过完整 update 或 enable 产生版本加一的同步命令恢复，不自动重试已失败命令或删除任务。耗尽清理按 Session→Schedule 顺序尝试非阻塞目标锁，锁冲突时延后清理，不阻塞其他 Session。
+
 ## 7. 最小持久数据
 
 所有业务 ID 沿用现有 TEXT 类型，所有结构变更统一维护 `database/schema.sql` 和 `database/init-data.sql`。
+
+`background_job.worker_id` 和 `execution_schedule.worker_id` 同时通过建表定义及 `schema.sql` 中的 `ALTER TABLE ADD COLUMN IF NOT EXISTS` 维护。已有行保持 nullable 未绑定状态；仅执行 schema 脚本也能升级旧表，重复执行保留旧行及其业务字段，初始化数据脚本不回填 Worker 身份。
 
 - `background_job`：ID、project/task/session/run 引用、类型、工作流类型及版本、Workflow ID、状态、截止时间、计划哈希、操作者、取消意图、错误码、版本和时间；一项任务最多绑定一个业务 Run。
 - `workflow_command`：命令 ID、类型、目标引用、版本、幂等键、请求哈希、投递状态、次数、重试时间、投递租约、固定错误摘要和时间；不保存任意 Prompt、Key 或 URL。

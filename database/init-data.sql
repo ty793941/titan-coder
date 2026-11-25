@@ -27,5 +27,4 @@ ON CONFLICT (id) DO NOTHING;
 -- 旧 Session 默认为 local，checkpoint.source_checkpoint_id 仅在跨环境导入时设置。
 -- 后台任务、调度、触发和 Workflow 命令仅由授权事务创建，不种入启用定义或服务凭证。
 -- 已有资源保持未绑定，直到独立 Workflow 身份在领取命令的同一事务中绑定。
-ALTER TABLE background_job ADD COLUMN IF NOT EXISTS worker_id TEXT;
-ALTER TABLE execution_schedule ADD COLUMN IF NOT EXISTS worker_id TEXT;
+-- worker_id 的旧表幂等升级由 schema.sql 的 ALTER TABLE 维护，不回填身份或创建伪任务。

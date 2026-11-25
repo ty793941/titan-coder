@@ -173,6 +173,7 @@ export class BackgroundJobsService {
 
   async scheduleGate(trx: Transaction<Database>, session: Selectable<SessionTable>, schedule: Selectable<ExecutionScheduleTable>, definitionVersion: number): Promise<ErrorCode | undefined> {
     if (schedule.version !== definitionVersion) return 'SCHEDULE_DEFINITION_SUPERSEDED';
+    if (schedule.sync_status === 'blocked') return 'WORKFLOW_COMMAND_FAILED';
     if (!schedule.enabled) return 'SCHEDULE_DISABLED';
     if (Date.now() < schedule.starts_at.getTime() || Date.now() >= schedule.ends_at.getTime()) return 'SCHEDULE_OUTSIDE_WINDOW';
     try { await validateLocalSession(trx, session, schedule.plan_hash); }

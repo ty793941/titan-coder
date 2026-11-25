@@ -3,7 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DomainError, workflowCommandSchema, workflowRetryRequestSchema, type WorkflowCommand } from '@titan/contracts';
 import { sql, type Selectable, type Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
-import type { BackgroundJobTable, Database } from '../../database/types.js';
+import type { BackgroundJobTable, Database, ExecutionScheduleTable } from '../../database/types.js';
 import { canonicalJson, sameToken, tokenHash } from '../daemons/execution-policy.js';
 import { EventsService } from '../events/events.service.js';
 import { lockBackgroundJob, lockSchedule } from './orchestration-policy.js';
@@ -40,10 +40,13 @@ export class WorkflowCommandsService {
       for (const row of exhausted) {
         const target = row.kind === 'start_job' ? await lockBackgroundJob(trx, row.target_id, true) : undefined;
         if (row.kind === 'start_job' && !target) continue;
+        const schedule = row.kind === 'sync_schedule' ? await lockSchedule(trx, row.target_id, true) : undefined;
+        if (row.kind === 'sync_schedule' && !schedule) continue;
         await trx.updateTable('workflow_command')
           .set({ status: 'failed', error_code: 'WORKFLOW_COMMAND_FAILED', claim_token_hash: null, lease_expires_at: null })
           .where('id', '=', row.id).execute();
         if (target) await this.failUnexecuted(trx, target.row);
+        if (schedule) await this.failScheduleSync(trx, schedule.row, row.definition_version!);
       }
       const candidates = await trx.selectFrom('workflow_command').selectAll().where('attempts', '<', 10)
         .where(eb => eb.or([
@@ -94,7 +97,7 @@ export class WorkflowCommandsService {
       if (!source) throw new DomainError('RESOURCE_NOT_FOUND', 'workflow command was not found');
       // ACK先取得领域锁，避免与领域事务内的enqueue形成command→session反向等待。
       const job = source.kind === 'start_job' ? await lockBackgroundJob(trx, source.target_id) : undefined;
-      if (source.kind === 'sync_schedule') await lockSchedule(trx, source.target_id);
+      const schedule = source.kind === 'sync_schedule' ? await lockSchedule(trx, source.target_id) : undefined;
       const row = await trx.selectFrom('workflow_command').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
       if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'workflow command was not found');
       if (!retry && row.status === 'completed' && row.worker_id === workerId && sameToken(claimToken, row.claim_token_hash)) return;
@@ -105,6 +108,7 @@ export class WorkflowCommandsService {
       await trx.updateTable('workflow_command').set({ status, claim_token_hash: !retry ? row.claim_token_hash : null, lease_expires_at: null,
         error_code: retry?.errorCode ?? null, next_attempt_at: new Date(Date.now() + Math.min(300000, 1000 * 2 ** (row.attempts - 1))) }).where('id', '=', id).execute();
       if (status === 'failed' && job) await this.failUnexecuted(trx, job.row);
+      if (status === 'failed' && schedule) await this.failScheduleSync(trx, schedule.row, row.definition_version!);
       if (!retry && row.kind === 'sync_schedule') {
         await trx.updateTable('execution_schedule').set(eb => ({ sync_status: eb.case().when('enabled', '=', true).then('active').else('paused').end() }))
           .where('id', '=', row.target_id).where('version', '=', row.definition_version!).where('sync_status', '=', 'pending_sync').execute();
@@ -117,5 +121,12 @@ export class WorkflowCommandsService {
     await trx.updateTable('background_job').set({ status: 'failed', error_code: 'WORKFLOW_COMMAND_FAILED', version: job.version + 1 }).where('id', '=', job.id).execute();
     await this.events.append(trx, { eventType: 'background_job.failed', projectId: job.project_id, taskId: job.task_id, sessionId: job.session_id,
       actor: { type: 'system', id: 'control-plane' }, payload: { jobId: job.id, status: 'failed', errorCode: 'WORKFLOW_COMMAND_FAILED' } });
+  }
+
+  private async failScheduleSync(trx: Transaction<Database>, schedule: Selectable<ExecutionScheduleTable>, definitionVersion: number) {
+    if (schedule.version !== definitionVersion) return;
+    await trx.updateTable('execution_schedule').set({ sync_status: 'blocked' }).where('id', '=', schedule.id).where('version', '=', definitionVersion).execute();
+    await this.events.append(trx, { eventType: 'schedule.sync_failed', projectId: schedule.project_id, taskId: schedule.task_id, sessionId: schedule.session_id,
+      actor: { type: 'system', id: 'control-plane' }, payload: { scheduleId: schedule.id, version: definitionVersion, errorCode: 'WORKFLOW_COMMAND_FAILED' } });
   }
 }
