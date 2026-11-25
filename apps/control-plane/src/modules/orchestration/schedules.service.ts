@@ -110,7 +110,7 @@ export class SchedulesService {
       if (!reason) {
         const { config } = await validateLocalSession(trx, session, row.plan_hash);
         const job = await this.jobs.insert(trx, session, { kind: 'run', planHash: row.plan_hash,
-          deadlineAt: new Date(Math.min(row.ends_at.getTime(), now + config.timeoutMs)), scheduleId: id,
+          deadlineAt: new Date(now + config.timeoutMs), scheduleId: id,
           definitionVersion: parsed.definitionVersion, workflowId: parsed.occurrenceId, workerId,
         });
         jobId = job.id;

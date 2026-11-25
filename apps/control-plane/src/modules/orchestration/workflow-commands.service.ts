@@ -10,6 +10,8 @@ import { lockBackgroundJob, lockSchedule } from './orchestration-policy.js';
 
 @Injectable()
 export class WorkflowCommandsService {
+  private readonly claimCursors = new Map<string, string>();
+
   constructor(@Inject(DatabaseService) private readonly database: DatabaseService, @Inject(EventsService) private readonly events: EventsService) {}
 
   async enqueue(trx: Transaction<Database>, kind: WorkflowCommand['kind'], targetId: string, definitionVersion?: number): Promise<void> {
@@ -21,7 +23,9 @@ export class WorkflowCommandsService {
   }
 
   async claim(workerId: string): Promise<WorkflowCommand | undefined> {
-    return this.database.db.transaction().execute(async trx => {
+    const cursor = this.claimCursors.get(workerId);
+    let nextCursor: string | undefined;
+    const command = await this.database.db.transaction().execute(async trx => {
       const now = new Date();
       // 不撤销尚有效的外部投递租约；旧版本待投递或过期命令仅标记obsolete，不修改同步状态。
       const obsolete = await trx.selectFrom('workflow_command').select('id')
@@ -48,7 +52,7 @@ export class WorkflowCommandsService {
         if (target) await this.failUnexecuted(trx, target.row);
         if (schedule) await this.failScheduleSync(trx, schedule.row, row.definition_version!);
       }
-      const candidates = await trx.selectFrom('workflow_command').selectAll().where('attempts', '<', 10)
+      let query = trx.selectFrom('workflow_command').selectAll().where('attempts', '<', 10)
         .where(eb => eb.or([
           eb.and([eb('status', '=', 'pending'), eb('next_attempt_at', '<=', now)]),
           eb.and([eb('status', '=', 'claimed'), eb('lease_expires_at', '<=', now)]),
@@ -62,7 +66,11 @@ export class WorkflowCommandsService {
               .whereRef('active.target_id', '=', 'workflow_command.target_id').where('active.kind', '=', 'sync_schedule')
               .where('active.status', '=', 'claimed').where('active.lease_expires_at', '>', now))),
           ]),
-        ])).orderBy('created_at', 'asc').orderBy('id', 'asc').limit(100).forUpdate().skipLocked().execute();
+        ]));
+      // 每次最多检查一页；整页均不可领取才推进。数据库内比较时间，保留微秒精度。
+      if (cursor) query = query.where(sql<boolean>`(workflow_command.created_at, workflow_command.id) >
+        (select previous.created_at, previous.id from workflow_command as previous where previous.id = ${cursor})`);
+      const candidates = await query.orderBy('created_at', 'asc').orderBy('id', 'asc').limit(100).forUpdate().skipLocked().execute();
       for (const row of candidates) {
         if (row.kind === 'sync_schedule') {
           const lock = await sql<{ acquired: boolean }>`select pg_try_advisory_xact_lock(hashtextextended(${`schedule-command:${row.target_id}`}, 0)) as acquired`.execute(trx);
@@ -87,8 +95,13 @@ export class WorkflowCommandsService {
           claim_token_hash: tokenHash(claimToken), lease_expires_at: new Date(Date.now() + 30000) }).where('id', '=', row.id).execute();
         return workflowCommandSchema.parse({ id: row.id, claimToken, kind: row.kind, targetId: row.target_id, ...(row.definition_version ? { definitionVersion: row.definition_version } : {}) });
       }
+      if (candidates.length === 100) nextCursor = candidates[candidates.length - 1]!.id;
       return undefined;
     });
+    // 仅在事务成功后推进；成功领取或扫到队尾后回到最老任务，避免新到命令饿死旧任务。
+    if (nextCursor) this.claimCursors.set(workerId, nextCursor);
+    else this.claimCursors.delete(workerId);
+    return command;
   }
 
   async acknowledge(id: string, claimToken: string, workerId: string, retry?: ReturnType<typeof workflowRetryRequestSchema.parse>): Promise<void> {

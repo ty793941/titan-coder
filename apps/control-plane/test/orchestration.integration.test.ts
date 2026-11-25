@@ -779,3 +779,50 @@ it.each(['deadline', 'explicit_cancel', 'internal_expiry'] as const)('honors %s 
   expect(await db.selectFrom('event').select('event_id').where('run_id', '=', run.runId).where('event_type', '=', 'run.cancelled').execute()).toHaveLength(1);
   expect(await db.selectFrom('event').select('event_id').where('session_id', '=', f.session.id).where('event_type', '=', 'background_job.cancel_requested').execute()).toHaveLength(1);
 });
+
+it('reaches a free command behind a full page of locked targets and resets to the oldest after success', async () => {
+  const f = await fixture(); const g = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const jobs = Array.from({ length: 101 }, (_, index) => ({ id: `bg_${randomUUID()}`, project_id: 'project_dev', task_id: index < 100 ? f.task.id : g.task.id,
+    session_id: index < 100 ? f.session.id : g.session.id, kind: 'run', run_id: null, schedule_id: null, definition_version: null,
+    workflow_id: `titan/fair/${randomUUID()}`, deadline_at: new Date(Date.now() + 600000), plan_hash: f.planHash, requested_by: 'test' }));
+  await db.insertInto('background_job').values(jobs).execute();
+  await db.insertInto('workflow_command').values(jobs.map((job, index) => ({ id: `cmd_${randomUUID()}`, kind: 'start_job', target_id: job.id,
+    definition_version: null, idempotency_key: `start_job:${job.id}:1`, request_hash: 'a'.repeat(64), created_at: new Date(index) }))).execute();
+  const replies = await db.transaction().execute(async trx => {
+    await trx.selectFrom('session').select('id').where('id', '=', f.session.id).forUpdate().execute();
+    const first = await rawInternal('/commands/claim', { workerId: 'worker_test' });
+    const second = await rawInternal('/commands/claim', { workerId: 'worker_test' });
+    const frontIds = jobs.slice(0, 100).map(job => job.id);
+    expect((await trx.selectFrom('background_job').select('worker_id').where('id', 'in', frontIds).execute()).every(row => row.worker_id === null)).toBe(true);
+    expect((await trx.selectFrom('workflow_command').select(['status', 'attempts', 'worker_id']).where('target_id', 'in', frontIds).execute())
+      .every(row => row.status === 'pending' && row.attempts === 0 && row.worker_id === null)).toBe(true);
+    return [first, second];
+  });
+  expect(replies.find(reply => reply.status === 200)?.body.targetId).toBe(jobs[100]!.id);
+  const oldest = await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  expect(oldest.body.targetId).toBe(jobs[0]!.id);
+});
+
+it('keeps the accepted Run execution budget past the schedule admission end', async () => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  await claimTarget(schedule.id);
+  const endsAt = Date.now() + 1000;
+  await db.updateTable('execution_schedule').set({ ends_at: new Date(endsAt) }).where('id', '=', schedule.id).execute();
+  const admittedAt = Date.now();
+  const occurrence = { definitionVersion: 2, occurrenceId: `titan/budget/${randomUUID()}`, scheduledAt: new Date(admittedAt).toISOString() };
+  const job = (await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).body;
+  expect(job.status).toBe('created');
+  const persisted = await db.selectFrom('background_job').select('deadline_at').where('id', '=', job.jobId).executeTakeFirstOrThrow();
+  expect(persisted.deadline_at.getTime()).toBeGreaterThanOrEqual(admittedAt + 60000);
+  const dispatched = await rawInternal(`/jobs/${job.jobId}/dispatch`, {});
+  expect(dispatched.body.runId).toBeDefined();
+  await db.updateTable('run').set({ status: 'running' }).where('id', '=', dispatched.body.runId).execute();
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, endsAt - Date.now()) + 50));
+  expect((await rawInternal(`/jobs/${job.jobId}`)).body.status).toBe('running');
+  expect(await db.selectFrom('execution_job').select('cancel_requested').where('run_id', '=', dispatched.body.runId).executeTakeFirstOrThrow()).toEqual({ cancel_requested: false });
+  expect((await rawInternal(`/schedules/${schedule.id}/occurrences`, { ...occurrence, occurrenceId: `titan/after-end/${randomUUID()}`, scheduledAt: new Date().toISOString() })).body).toEqual({ status: 'skipped' });
+});
