@@ -231,14 +231,14 @@ export interface BackgroundJobTable {
   schedule_id: string | null; definition_version: number | null; kind: string;
   workflow_version: Generated<number>; workflow_id: string; status: Generated<string>; deadline_at: Date;
   plan_hash: string; cancel_requested: Generated<boolean>; error_code: Generated<string | null>;
-  requested_by: string; version: Generated<number>; created_at: Generated<Date>;
+  requested_by: string; worker_id: Generated<string | null>; version: Generated<number>; created_at: Generated<Date>;
 }
 export interface ExecutionScheduleTable {
   id: string; project_id: string; task_id: string; session_id: string; plan_hash: string; timezone: string;
   cron: string | null; interval_seconds: number | null; starts_at: Date; ends_at: Date;
   max_runs: number; run_count: Generated<number>; overlap_policy: string; catchup_window_seconds: number;
   catchup_until: Generated<Date | null>; enabled: Generated<boolean>; sync_status: Generated<string>;
-  temporal_schedule_id: string; version: Generated<number>; requested_by: string; created_at: Generated<Date>;
+  temporal_schedule_id: string; version: Generated<number>; requested_by: string; worker_id: Generated<string | null>; created_at: Generated<Date>;
 }
 export interface WorkflowCommandTable {
   id: string; kind: string; target_id: string; definition_version: number | null;

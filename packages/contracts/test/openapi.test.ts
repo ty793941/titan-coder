@@ -40,6 +40,16 @@ function controllerRoutes() {
 }
 
 describe('Phase 1 OpenAPI freeze', () => {
+  it('publishes the bound-worker job failure endpoint with a strict error enum', () => {
+    const api = load();
+    const fail = api.paths['/api/internal/workflow/jobs/{id}/fail']?.post;
+    expect(fail).toBeDefined();
+    expect(fail.security).toEqual([{ WorkflowBearer: [] }]);
+    expect(fail.requestBody.content['application/json'].schema).toEqual(ref('WorkflowFailRequest'));
+    expect(fail.responses['200'].content['application/json'].schema).toEqual(ref('JobObservation'));
+    expect(fail.responses).toHaveProperty('403');
+    expect(api.components.schemas.WorkflowFailRequest).toMatchObject({ additionalProperties: false, required: ['errorCode'], properties: { errorCode: { enum: [...errorCodes] } } });
+  });
   it('freezes strict background, schedule and independent workflow service contracts', () => {
     const api = load();
     expect(api.components.securitySchemes.WorkflowBearer).toMatchObject({ type: 'http', scheme: 'bearer' });

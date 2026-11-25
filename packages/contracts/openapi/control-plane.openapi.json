@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-24T13:49:34.676Z"
+    "generatedAt": "2026-11-25T08:13:54.655Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -2518,7 +2518,7 @@
       "get": {
         "operationId": "getBackgroundJob",
         "summary": "读取后台任务",
-        "description": "读取后台任务",
+        "description": "读取后台任务 到deadline时即使无Run、无Temporal也持久expired、取消意图及cancel_job命令；重复GET不重复事件。",
         "security": [
           {
             "ConsoleBearer": []
@@ -3039,7 +3039,7 @@
       "post": {
         "operationId": "claimWorkflowCommand",
         "summary": "领取Workflow命令投递租约",
-        "description": "workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。sync_schedule只领取当前definitionVersion，同Schedule有效租约串行互斥；尚未领取或租约过期的旧版本标记completed/errorCode=SCHEDULE_DEFINITION_SUPERSEDED，不推进syncStatus。有效旧租约结束前不领取新版。租约过期不能中断已发送的网络请求，Temporal更新仍需客户端按版本冲突令牌/单调版本进行fencing，禁止旧版本覆盖新版。",
+        "description": "workerId必须绑定独立Workflow身份，skip locked领取后立即释放事务锁；30秒租约，claimToken只持久化SHA-256，每次重领换token，最多10次尝试。sync_schedule只领取当前definitionVersion，同Schedule有效租约串行互斥；尚未领取或租约过期的旧版本标记completed/errorCode=SCHEDULE_DEFINITION_SUPERSEDED，不推进syncStatus。有效旧租约结束前不领取新版。租约过期不能中断已发送的网络请求，Temporal更新仍需客户端按版本冲突令牌/单调版本进行fencing，禁止旧版本覆盖新版。 同事务持久绑定目标job/schedule的workerId；已绑定其他Worker的资源不能重领。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3158,7 +3158,7 @@
       "post": {
         "operationId": "retryWorkflowCommand",
         "summary": "有限退避或停止重试",
-        "description": "有效租约内retryable=true退避1秒指数增长、最多300秒、最多10次；永久错误或耗尽转failed。只保存固定errorCode。",
+        "description": "有效租约内retryable=true退避1秒指数增长、最多300秒、最多10次；永久错误或耗尽转failed。只保存固定errorCode。 start_job永久失败或10次耗尽且未执行时，原子置后台任务failed/WORKFLOW_COMMAND_FAILED并写事件；已创建Run保持Daemon管理。过期第10次租约在下一claim清理时执行相同收敛。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3217,7 +3217,7 @@
       "get": {
         "operationId": "observeWorkflowJob",
         "summary": "观察同一业务Run",
-        "description": "观察同一业务Run",
+        "description": "观察同一业务Run 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。 授权后到期检查与Console GET一致。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3273,7 +3273,7 @@
       "get": {
         "operationId": "getWorkflowJobExecution",
         "summary": "读取后台任务实际Workflow执行标识",
-        "description": "独立WorkflowBearer，仅返回数据库已授权任务的执行标识；服务端解析并核对Project/Task/Session、Run和occurrence归属，不接受客户端传入workflowId。未知资源或归属不一致404，Console/Daemon身份401。Dispatcher用于cancel实际Workflow，此GET不是Activity，不扩展JobObservation。",
+        "description": "独立WorkflowBearer，仅返回数据库已授权任务的执行标识；服务端解析并核对Project/Task/Session、Run和occurrence归属，不接受客户端传入workflowId。未知资源或归属不一致404，Console/Daemon身份401。Dispatcher用于cancel实际Workflow，此GET不是Activity，不扩展JobObservation。 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3329,7 +3329,7 @@
       "post": {
         "operationId": "dispatchWorkflowJob",
         "summary": "幂等原子派发业务任务",
-        "description": "同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。",
+        "description": "同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3395,7 +3395,7 @@
       "post": {
         "operationId": "cancelWorkflowJob",
         "summary": "按持久截止时间取消业务任务",
-        "description": "reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。",
+        "description": "reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3457,11 +3457,77 @@
         }
       }
     },
+    "/api/internal/workflow/jobs/{id}/fail": {
+      "post": {
+        "operationId": "failWorkflowJob",
+        "summary": "记录后台任务编排失败",
+        "description": "仅允许已绑定workerId的Workflow身份调用。errorCode限平台既有枚举；幂等保留终态，只将后台任务置failed并写background_job.failed事件，不修改Run、Session或execution_job，真实执行仍由Daemon管理。 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
+        "security": [
+          {
+            "WorkflowBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowFailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "严格最小观察结构。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/internal/workflow/schedules/{id}": {
       "get": {
         "operationId": "getWorkflowSchedule",
         "summary": "读取安全Schedule定义",
-        "description": "读取安全Schedule定义",
+        "description": "读取安全Schedule定义 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
         "security": [
           {
             "WorkflowBearer": []
@@ -3517,7 +3583,7 @@
       "post": {
         "operationId": "admitScheduleOccurrence",
         "summary": "原子接纳稳定触发",
-        "description": "occurrenceId为稳定Temporal Workflow ID且全局唯一，同ID异定义409；同Schedule/版本/计划时间不会重复接纳。同触发重试返回相同结果，创建Job绑定occurrenceId且不再投递start_job命令；不会提前创建execution_job或消耗maxRuns。",
+        "description": "occurrenceId为稳定Temporal Workflow ID且全局唯一，同ID异定义409；同Schedule/版本/计划时间不会重复接纳。同触发重试返回相同结果，创建Job绑定occurrenceId且不再投递start_job命令；不会提前创建execution_job或消耗maxRuns。 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。",
         "security": [
           {
             "WorkflowBearer": []
@@ -5452,7 +5518,7 @@
             }
           }
         ],
-        "description": "cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。"
+        "description": "cron与intervalSeconds恰有一个，五字段cron最短一分钟；endsAt严格晚于startsAt。maxRuns为1..100且仅在派发事务成功创建Run时消耗；版本更新不重置计数。enabled创建固定false，启用/暂停/完整定义更新要求expectedVersion。catchup默认60秒，10..3600秒；超过10秒的投递延迟视为补投，在接纳时以行锁设置now+catchupWindowSeconds的恢复窗口，窗口内最多一次；普通10秒内延迟不消耗补投窗口。每次接纳及派发重新校验启用、版本、Plan、Daemon授权和Session并发；旧定义、重叠、超限、窗口外均skipped，计划或权限失效禁用并写事件。 run_count达到maxRuns的同一派发事务禁用Schedule、version加一并enqueue sync_schedule停止未来触发，不取消本次Run；Temporal不得以触发次数替代实际Run计数。"
       },
       "ScheduleOccurrenceRequest": {
         "type": "object",
@@ -5661,6 +5727,56 @@
         },
         "required": [
           "reason"
+        ],
+        "additionalProperties": false
+      },
+      "WorkflowFailRequest": {
+        "type": "object",
+        "properties": {
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_FAILED",
+              "RESOURCE_NOT_FOUND",
+              "VERSION_CONFLICT",
+              "IDEMPOTENCY_CONFLICT",
+              "INVALID_STATE_TRANSITION",
+              "TASK_PLAN_REQUIRED",
+              "PLAN_HASH_STALE",
+              "PERMISSION_DENIED",
+              "APPROVAL_REQUIRED",
+              "TOOL_INPUT_INVALID",
+              "TOOL_BLOCKED_BY_HOOK",
+              "TOOL_EXECUTION_FAILED",
+              "TOOL_TIMEOUT",
+              "DAEMON_UNAVAILABLE",
+              "WORKSPACE_CONFLICT",
+              "CHECKPOINT_NOT_FOUND",
+              "RUNTIME_ADAPTER_UNAVAILABLE",
+              "EVENT_SEQUENCE_GAP",
+              "EXECUTION_LEASE_EXPIRED",
+              "CLOUD_SECRET_LEASE_EXPIRED",
+              "CLOUD_SECRET_CONSUMED",
+              "CLOUD_WORKER_DISCONNECTED",
+              "CLOUD_RUNTIME_WAITING_INPUT",
+              "HANDOFF_CHECKPOINT_INVALID",
+              "HANDOFF_TARGET_UNAVAILABLE",
+              "HANDOFF_SNAPSHOT_FAILED",
+              "HANDOFF_TRANSFER_FAILED",
+              "WORKFLOW_COMMAND_LEASE_EXPIRED",
+              "WORKFLOW_COMMAND_FAILED",
+              "BACKGROUND_JOB_EXPIRED",
+              "SCHEDULE_DISABLED",
+              "SCHEDULE_DEFINITION_SUPERSEDED",
+              "SCHEDULE_MAX_RUNS_REACHED",
+              "SCHEDULE_OVERLAP",
+              "SCHEDULE_OUTSIDE_WINDOW",
+              "SCHEDULE_CATCHUP_SKIPPED"
+            ]
+          }
+        },
+        "required": [
+          "errorCode"
         ],
         "additionalProperties": false
       },

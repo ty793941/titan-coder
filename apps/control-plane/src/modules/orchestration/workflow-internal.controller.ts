@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import { DomainError, jobObservationSchema, orchestrationEmptyRequestSchema, workflowCancelRequestSchema, workflowClaimRequestSchema, workflowCompleteRequestSchema, workflowRetryRequestSchema } from '@titan/contracts';
+import { DomainError, jobObservationSchema, orchestrationEmptyRequestSchema, workflowCancelRequestSchema, workflowClaimRequestSchema, workflowCompleteRequestSchema, workflowFailRequestSchema, workflowRetryRequestSchema } from '@titan/contracts';
 import { WorkflowAuth } from '../../common/workflow-auth.js';
 import { BackgroundJobsService } from './background-jobs.service.js';
 import { WorkflowCommandsService } from './workflow-commands.service.js';
@@ -42,36 +42,43 @@ export class WorkflowInternalController {
 
   @Get('jobs/:id')
   observe(@Param('id') id: string, @Headers('authorization') authorization?: string) {
-    this.workflowAuth.authenticate(authorization); return this.jobs.observe(id);
+    const workerId = this.workflowAuth.authenticate(authorization); return this.jobs.observe(id, workerId);
   }
 
   @Get('jobs/:id/execution')
   execution(@Param('id') id: string, @Headers('authorization') authorization?: string) {
-    this.workflowAuth.authenticate(authorization); return this.jobs.execution(id);
+    const workerId = this.workflowAuth.authenticate(authorization); return this.jobs.execution(id, workerId);
   }
 
   @Post('jobs/:id/dispatch')
   @HttpCode(200)
   dispatch(@Param('id') id: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
-    this.workflowAuth.authenticate(authorization); orchestrationEmptyRequestSchema.parse(body); return this.jobs.dispatch(id);
+    const workerId = this.workflowAuth.authenticate(authorization); orchestrationEmptyRequestSchema.parse(body); return this.jobs.dispatch(id, workerId);
   }
 
   @Post('jobs/:id/cancel')
   @HttpCode(200)
   async cancel(@Param('id') id: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
     const workerId = this.workflowAuth.authenticate(authorization); const input = workflowCancelRequestSchema.parse(body);
-    const view = await this.jobs.cancel(id, input.reason, false, { type: 'system', id: workerId });
+    const view = await this.jobs.cancel(id, input.reason, false, { type: 'system', id: workerId }, workerId);
     return jobObservationSchema.parse({ jobId: view.jobId, status: view.status, deadlineAt: view.deadlineAt, ...(view.runId ? { runId: view.runId } : {}), ...(view.errorCode ? { errorCode: view.errorCode } : {}) });
+  }
+
+  @Post('jobs/:id/fail')
+  @HttpCode(200)
+  fail(@Param('id') id: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
+    const workerId = this.workflowAuth.authenticate(authorization);
+    return this.jobs.fail(id, workflowFailRequestSchema.parse(body).errorCode, workerId);
   }
 
   @Get('schedules/:id')
   schedule(@Param('id') id: string, @Headers('authorization') authorization?: string) {
-    this.workflowAuth.authenticate(authorization); return this.schedules.get(id);
+    const workerId = this.workflowAuth.authenticate(authorization); return this.schedules.get(id, workerId);
   }
 
   @Post('schedules/:id/occurrences')
   @HttpCode(200)
   occurrence(@Param('id') id: string, @Body() body: unknown, @Headers('authorization') authorization?: string) {
-    this.workflowAuth.authenticate(authorization); return this.schedules.occurrence(id, body);
+    const workerId = this.workflowAuth.authenticate(authorization); return this.schedules.occurrence(id, body, workerId);
   }
 }

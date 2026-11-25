@@ -26,3 +26,6 @@ ON CONFLICT (id) DO NOTHING;
 -- 云端执行、Handoff 和短期 Secret Lease 仅由认证事务创建，不初始化凭证或伪租约。
 -- 旧 Session 默认为 local，checkpoint.source_checkpoint_id 仅在跨环境导入时设置。
 -- 后台任务、调度、触发和 Workflow 命令仅由授权事务创建，不种入启用定义或服务凭证。
+-- 已有资源保持未绑定，直到独立 Workflow 身份在领取命令的同一事务中绑定。
+ALTER TABLE background_job ADD COLUMN IF NOT EXISTS worker_id TEXT;
+ALTER TABLE execution_schedule ADD COLUMN IF NOT EXISTS worker_id TEXT;

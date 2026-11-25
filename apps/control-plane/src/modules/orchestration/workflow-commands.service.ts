@@ -1,14 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { DomainError, workflowCommandSchema, workflowRetryRequestSchema, type WorkflowCommand } from '@titan/contracts';
-import { sql, type Transaction } from 'kysely';
+import { sql, type Selectable, type Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
-import type { Database } from '../../database/types.js';
+import type { BackgroundJobTable, Database } from '../../database/types.js';
 import { canonicalJson, sameToken, tokenHash } from '../daemons/execution-policy.js';
+import { EventsService } from '../events/events.service.js';
+import { lockBackgroundJob, lockSchedule } from './orchestration-policy.js';
 
 @Injectable()
 export class WorkflowCommandsService {
-  constructor(@Inject(DatabaseService) private readonly database: DatabaseService) {}
+  constructor(@Inject(DatabaseService) private readonly database: DatabaseService, @Inject(EventsService) private readonly events: EventsService) {}
 
   async enqueue(trx: Transaction<Database>, kind: WorkflowCommand['kind'], targetId: string, definitionVersion?: number): Promise<void> {
     const request = { kind, targetId, ...(definitionVersion ? { definitionVersion } : {}) };
@@ -32,12 +34,17 @@ export class WorkflowCommandsService {
       if (obsolete.length) await trx.updateTable('workflow_command')
         .set({ status: 'completed', error_code: 'SCHEDULE_DEFINITION_SUPERSEDED', claim_token_hash: null, lease_expires_at: null })
         .where('id', 'in', obsolete.map(row => row.id)).execute();
-      const exhausted = await trx.selectFrom('workflow_command').select('id')
+      const exhausted = await trx.selectFrom('workflow_command').selectAll()
         .where('status', '=', 'claimed').where('lease_expires_at', '<=', now).where('attempts', '>=', 10)
         .orderBy('id', 'asc').limit(100).forUpdate().skipLocked().execute();
-      if (exhausted.length) await trx.updateTable('workflow_command')
-        .set({ status: 'failed', error_code: 'WORKFLOW_COMMAND_FAILED', claim_token_hash: null, lease_expires_at: null })
-        .where('id', 'in', exhausted.map(row => row.id)).execute();
+      for (const row of exhausted) {
+        const target = row.kind === 'start_job' ? await lockBackgroundJob(trx, row.target_id, true) : undefined;
+        if (row.kind === 'start_job' && !target) continue;
+        await trx.updateTable('workflow_command')
+          .set({ status: 'failed', error_code: 'WORKFLOW_COMMAND_FAILED', claim_token_hash: null, lease_expires_at: null })
+          .where('id', '=', row.id).execute();
+        if (target) await this.failUnexecuted(trx, target.row);
+      }
       const candidates = await trx.selectFrom('workflow_command').selectAll().where('attempts', '<', 10)
         .where(eb => eb.or([
           eb.and([eb('status', '=', 'pending'), eb('next_attempt_at', '<=', now)]),
@@ -63,6 +70,15 @@ export class WorkflowCommandsService {
             .where('target_id', '=', row.target_id).where('status', '=', 'claimed').where('lease_expires_at', '>', new Date()).executeTakeFirst();
           if (active) continue;
         }
+        if (row.kind === 'sync_schedule') {
+          const target = await lockSchedule(trx, row.target_id, true);
+          if (!target || target.row.version !== row.definition_version || (target.row.worker_id && target.row.worker_id !== workerId)) continue;
+          await trx.updateTable('execution_schedule').set({ worker_id: workerId }).where('id', '=', row.target_id).execute();
+        } else {
+          const target = await lockBackgroundJob(trx, row.target_id, true);
+          if (!target || (target.row.worker_id && target.row.worker_id !== workerId)) continue;
+          await trx.updateTable('background_job').set({ worker_id: workerId }).where('id', '=', row.target_id).execute();
+        }
         const claimToken = randomBytes(32).toString('hex');
         await trx.updateTable('workflow_command').set({ status: 'claimed', attempts: row.attempts + 1, worker_id: workerId,
           claim_token_hash: tokenHash(claimToken), lease_expires_at: new Date(Date.now() + 30000) }).where('id', '=', row.id).execute();
@@ -74,6 +90,11 @@ export class WorkflowCommandsService {
 
   async acknowledge(id: string, claimToken: string, workerId: string, retry?: ReturnType<typeof workflowRetryRequestSchema.parse>): Promise<void> {
     await this.database.db.transaction().execute(async trx => {
+      const source = await trx.selectFrom('workflow_command').select(['kind', 'target_id']).where('id', '=', id).executeTakeFirst();
+      if (!source) throw new DomainError('RESOURCE_NOT_FOUND', 'workflow command was not found');
+      // ACK先取得领域锁，避免与领域事务内的enqueue形成command→session反向等待。
+      const job = source.kind === 'start_job' ? await lockBackgroundJob(trx, source.target_id) : undefined;
+      if (source.kind === 'sync_schedule') await lockSchedule(trx, source.target_id);
       const row = await trx.selectFrom('workflow_command').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
       if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'workflow command was not found');
       if (!retry && row.status === 'completed' && row.worker_id === workerId && sameToken(claimToken, row.claim_token_hash)) return;
@@ -83,10 +104,18 @@ export class WorkflowCommandsService {
       const status = !retry ? 'completed' : retry.retryable && row.attempts < 10 ? 'pending' : 'failed';
       await trx.updateTable('workflow_command').set({ status, claim_token_hash: !retry ? row.claim_token_hash : null, lease_expires_at: null,
         error_code: retry?.errorCode ?? null, next_attempt_at: new Date(Date.now() + Math.min(300000, 1000 * 2 ** (row.attempts - 1))) }).where('id', '=', id).execute();
+      if (status === 'failed' && job) await this.failUnexecuted(trx, job.row);
       if (!retry && row.kind === 'sync_schedule') {
         await trx.updateTable('execution_schedule').set(eb => ({ sync_status: eb.case().when('enabled', '=', true).then('active').else('paused').end() }))
           .where('id', '=', row.target_id).where('version', '=', row.definition_version!).where('sync_status', '=', 'pending_sync').execute();
       }
     });
+  }
+
+  private async failUnexecuted(trx: Transaction<Database>, job: Selectable<BackgroundJobTable>) {
+    if (job.run_id || job.cancel_requested || ['completed', 'failed', 'cancelled', 'expired'].includes(job.status)) return;
+    await trx.updateTable('background_job').set({ status: 'failed', error_code: 'WORKFLOW_COMMAND_FAILED', version: job.version + 1 }).where('id', '=', job.id).execute();
+    await this.events.append(trx, { eventType: 'background_job.failed', projectId: job.project_id, taskId: job.task_id, sessionId: job.session_id,
+      actor: { type: 'system', id: 'control-plane' }, payload: { jobId: job.id, status: 'failed', errorCode: 'WORKFLOW_COMMAND_FAILED' } });
   }
 }

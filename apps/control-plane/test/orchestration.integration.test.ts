@@ -38,7 +38,20 @@ async function request(path: string, body?: unknown, token: string | null = cons
   });
   return { status: response.status, body: response.status === 204 ? undefined : await response.json() };
 }
-const internal = (path: string, body?: unknown, token: string | null = workflowToken) => request(`/internal/workflow${path}`, body, token);
+const bindings = new Map<string, Promise<unknown>>();
+const internal = async (path: string, body?: unknown, token: string | null = workflowToken) => {
+  const match = /^\/(jobs|schedules)\/([^/]+)/.exec(path);
+  if (token === workflowToken && match) {
+    const table = match[1] === 'jobs' ? 'background_job' : 'execution_schedule';
+    const target = await db.selectFrom(table).select('worker_id').where('id', '=', match[2]!).executeTakeFirst();
+    if (target && !target.worker_id) {
+      const targetId = match[2]!;
+      if (!bindings.has(targetId)) bindings.set(targetId, claimTarget(targetId));
+      try { await bindings.get(targetId); } finally { bindings.delete(targetId); }
+    }
+  }
+  return request(`/internal/workflow${path}`, body, token);
+};
 const count = async (table: 'run' | 'execution_job' | 'workflow_command' | 'background_job') => Number((await db.selectFrom(table).select(eb => eb.fn.countAll().as('count')).executeTakeFirstOrThrow()).count);
 
 async function fixture() {
@@ -85,6 +98,7 @@ it('cancellation and deadlines cannot be bypassed by a late dispatch or race', a
   await db.updateTable('background_job').set({ deadline_at: new Date(Date.now() - 1) }).where('id', '=', next.jobId).execute();
   expect((await internal(`/jobs/${next.jobId}/dispatch`, {})).body.status).toBe('expired');
   const race = (await request(`/sessions/${f.session.id}/background-jobs`, { ...f.jobInput, idempotencyKey: randomUUID() })).body;
+  await claimTarget(race.jobId);
   await Promise.all([internal(`/jobs/${race.jobId}/dispatch`, {}), request(`/background-jobs/${race.jobId}/cancel`, {})]);
   expect((await internal(`/jobs/${race.jobId}`)).body.status).toBe('cancelled');
   const rows = await db.selectFrom('run').selectAll().where('session_id', '=', f.session.id).execute();
@@ -475,4 +489,124 @@ it.each(['obsolete', 'exhausted'])('skips locked %s cleanup rows instead of bloc
   });
   expect((await claim!).status).toBe(200);
   expect(returnedWhileLocked).toBe(true);
+});
+
+const rawInternal = (path: string, body?: unknown) => request(`/internal/workflow${path}`, body, workflowToken);
+
+async function claimTarget(targetId: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const reply = await rawInternal('/commands/claim', { workerId: 'worker_test' });
+    expect(reply.status).toBe(200);
+    if (reply.body.targetId === targetId) return reply.body;
+    await rawInternal(`/commands/${reply.body.id}/complete`, { claimToken: reply.body.claimToken });
+  }
+  throw new Error('target command was not claimable');
+}
+
+it('denies unclaimed and different-worker jobs before any refresh or execution side effect', async () => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  await db.updateTable('background_job').set({ deadline_at: new Date(Date.now() - 1) }).where('id', '=', job.jobId).execute();
+  const before = await db.selectFrom('background_job').selectAll().where('id', '=', job.jobId).executeTakeFirstOrThrow();
+  const events = await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).execute();
+  for (const [suffix, body] of [['', undefined], ['/execution', undefined], ['/dispatch', {}], ['/cancel', { reason: 'cancelled' }], ['/fail', { errorCode: 'WORKFLOW_COMMAND_FAILED' }]] as const) {
+    expect((await rawInternal(`/jobs/${job.jobId}${suffix}`, body)).status).toBe(403);
+  }
+  expect(await db.selectFrom('background_job').selectAll().where('id', '=', job.jobId).executeTakeFirstOrThrow()).toEqual(before);
+  expect(await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).execute()).toEqual(events);
+  await claimTarget(job.jobId);
+  const { WorkflowAuth } = await import('../dist/common/workflow-auth.js');
+  const auth = app.get(WorkflowAuth);
+  await auth.initialize({ workerId: 'worker_other', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken);
+  try {
+    for (const [suffix, body] of [['', undefined], ['/execution', undefined], ['/dispatch', {}], ['/cancel', { reason: 'cancelled' }], ['/fail', { errorCode: 'WORKFLOW_COMMAND_FAILED' }]] as const) {
+      expect((await rawInternal(`/jobs/${job.jobId}${suffix}`, body)).status).toBe(403);
+    }
+    expect(await db.selectFrom('background_job').selectAll().where('id', '=', job.jobId).executeTakeFirstOrThrow()).toMatchObject({ status: 'pending_dispatch', cancel_requested: false, worker_id: 'worker_test' });
+    expect((await request(`/background-jobs/${job.jobId}`)).status).toBe(200);
+  } finally { await auth.initialize({ workerId: 'worker_test', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken); }
+});
+
+it('binds schedules at claim and inherits identity for occurrence jobs across credential restart', async () => {
+  const f = await fixture();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  const occurrence = { definitionVersion: 2, occurrenceId: `titan/binding/${randomUUID()}`, scheduledAt: new Date().toISOString() };
+  expect((await rawInternal(`/schedules/${schedule.id}`)).status).toBe(403);
+  expect((await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).status).toBe(403);
+  expect(await db.selectFrom('schedule_occurrence').selectAll().where('schedule_id', '=', schedule.id).execute()).toEqual([]);
+  const command = await claimTarget(schedule.id);
+  await rawInternal(`/commands/${command.id}/complete`, { claimToken: command.claimToken });
+  expect((await db.selectFrom('execution_schedule').selectAll().where('id', '=', schedule.id).executeTakeFirstOrThrow())).toMatchObject({ worker_id: 'worker_test' });
+  const { WorkflowAuth } = await import('../dist/common/workflow-auth.js');
+  const auth = app.get(WorkflowAuth);
+  await auth.initialize({ workerId: 'worker_other', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken);
+  try {
+    expect((await rawInternal(`/schedules/${schedule.id}`)).status).toBe(403);
+    expect((await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).status).toBe(403);
+  } finally { await auth.initialize({ workerId: 'worker_test', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken); }
+  const job = (await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).body;
+  expect(job.status).toBe('created');
+  expect(await db.selectFrom('background_job').selectAll().where('id', '=', job.jobId).executeTakeFirstOrThrow()).toMatchObject({ worker_id: 'worker_test' });
+  expect((await rawInternal(`/jobs/${job.jobId}/dispatch`, {})).status).toBe(200);
+  expect((await rawInternal(`/jobs/${job.jobId}`)).body).toMatchObject({ jobId: job.jobId, status: 'dispatching' });
+});
+
+it('expires undispatched jobs on GET with durable cancellation intent without Temporal', async () => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  await db.updateTable('background_job').set({ deadline_at: new Date(Date.now() - 1) }).where('id', '=', job.jobId).execute();
+  const first = await request(`/background-jobs/${job.jobId}`);
+  expect(first.body).toMatchObject({ status: 'expired', cancelRequested: true, errorCode: 'BACKGROUND_JOB_EXPIRED' });
+  expect((await request(`/background-jobs/${job.jobId}`)).body).toEqual(first.body);
+  expect(await db.selectFrom('workflow_command').selectAll().where('target_id', '=', job.jobId).where('kind', '=', 'cancel_job').execute()).toHaveLength(1);
+  expect(await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).where('event_type', '=', 'background_job.cancel_requested').execute()).toHaveLength(1);
+  expect(await db.selectFrom('run').selectAll().where('session_id', '=', f.session.id).execute()).toEqual([]);
+});
+
+it.each(['permanent', 'retry_exhausted', 'lease_exhausted'] as const)('closes unexecuted start_job intent on %s command failure', async mode => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  const command = await claimTarget(job.jobId);
+  if (mode !== 'permanent') await db.updateTable('workflow_command').set({ attempts: 10, ...(mode === 'lease_exhausted' ? { lease_expires_at: new Date(Date.now() - 1) } : {}) }).where('id', '=', command.id).execute();
+  if (mode === 'lease_exhausted') await rawInternal('/commands/claim', { workerId: 'worker_test' });
+  else expect((await rawInternal(`/commands/${command.id}/retry`, { claimToken: command.claimToken, errorCode: 'TOOL_EXECUTION_FAILED', retryable: mode !== 'permanent' })).status).toBe(204);
+  expect((await request(`/background-jobs/${job.jobId}`)).body).toMatchObject({ status: 'failed', errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  expect(await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).where('event_type', '=', 'background_job.failed').execute()).toHaveLength(1);
+  expect(await db.selectFrom('run').selectAll().where('session_id', '=', f.session.id).execute()).toEqual([]);
+});
+
+it('fails only the bound background job idempotently without falsifying a live Run', async () => {
+  const f = await fixture();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  await claimTarget(job.jobId);
+  const run = (await rawInternal(`/jobs/${job.jobId}/dispatch`, {})).body;
+  const runBefore = await db.selectFrom('run').selectAll().where('id', '=', run.runId).executeTakeFirstOrThrow();
+  const executionBefore = await db.selectFrom('execution_job').selectAll().where('run_id', '=', run.runId).executeTakeFirstOrThrow();
+  const path = `/jobs/${job.jobId}/fail`;
+  expect((await rawInternal(path, { errorCode: 'not-a-code' })).status).toBe(400);
+  expect((await rawInternal(path, { errorCode: 'WORKFLOW_COMMAND_FAILED', message: 'unsafe' })).status).toBe(400);
+  const failed = await rawInternal(path, { errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  expect(failed.status).toBe(200);
+  expect(failed.body).toEqual({ jobId: job.jobId, runId: run.runId, status: 'failed', deadlineAt: job.deadlineAt, errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  expect((await rawInternal(path, { errorCode: 'WORKFLOW_COMMAND_FAILED' })).body).toEqual(failed.body);
+  expect((await rawInternal(`/jobs/${job.jobId}`)).body).toEqual(failed.body);
+  expect(await db.selectFrom('event').selectAll().where('session_id', '=', f.session.id).where('event_type', '=', 'background_job.failed').execute()).toHaveLength(1);
+  expect(await db.selectFrom('run').selectAll().where('id', '=', run.runId).executeTakeFirstOrThrow()).toEqual(runBefore);
+  expect(await db.selectFrom('execution_job').selectAll().where('run_id', '=', run.runId).executeTakeFirstOrThrow()).toEqual(executionBefore);
+});
+
+it('disables and syncs a schedule at its final atomic dispatch while preserving the current Run', async () => {
+  const f = await fixture();
+  const schedule = (await request(`/sessions/${f.session.id}/schedules`, { ...f.scheduleInput, maxRuns: 1 })).body;
+  await request(`/schedules/${schedule.id}/enable`, { expectedVersion: 1 });
+  await claimTarget(schedule.id);
+  const occurrence = { definitionVersion: 2, occurrenceId: `titan/final/${randomUUID()}`, scheduledAt: new Date().toISOString() };
+  const job = (await rawInternal(`/schedules/${schedule.id}/occurrences`, occurrence)).body;
+  const replies = await Promise.all([rawInternal(`/jobs/${job.jobId}/dispatch`, {}), rawInternal(`/jobs/${job.jobId}/dispatch`, {})]);
+  expect(replies[0].body.runId).toBeDefined();
+  expect(replies[1].body.runId).toBe(replies[0].body.runId);
+  expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ enabled: false, runCount: 1, version: 3, syncStatus: 'pending_sync' });
+  expect(await db.selectFrom('workflow_command').selectAll().where('target_id', '=', schedule.id).where('definition_version', '=', 3).execute()).toHaveLength(1);
+  expect(await db.selectFrom('run').selectAll().where('id', '=', replies[0].body.runId).executeTakeFirstOrThrow()).toMatchObject({ status: 'queued' });
 });

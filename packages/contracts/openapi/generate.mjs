@@ -104,6 +104,7 @@ const schemas = Object.fromEntries(Object.entries({
   WorkflowCompleteRequest: orchestration.workflowCompleteRequestSchema,
   WorkflowRetryRequest: orchestration.workflowRetryRequestSchema,
   WorkflowCancelRequest: orchestration.workflowCancelRequestSchema,
+  WorkflowFailRequest: orchestration.workflowFailRequestSchema,
   OrchestrationEmptyRequest: orchestration.orchestrationEmptyRequestSchema,
 }).map(([key, value]) => [key, jsonSchema(value)]));
 
@@ -334,8 +335,19 @@ operation('get', '/api/internal/workflow/jobs/{id}', 'observeWorkflowJob', '观�
 operation('get', '/api/internal/workflow/jobs/{id}/execution', 'getWorkflowJobExecution', '读取后台任务实际Workflow执行标识', { auth: 'workflow', description: '独立WorkflowBearer，仅返回数据库已授权任务的执行标识；服务端解析并核对Project/Task/Session、Run和occurrence归属，不接受客户端传入workflowId。未知资源或归属不一致404，Console/Daemon身份401。Dispatcher用于cancel实际Workflow，此GET不是Activity，不扩展JobObservation。', responses: { '200': response('三个必填安全标识字段。', ref('JobExecution')) } });
 operation('post', '/api/internal/workflow/jobs/{id}/dispatch', 'dispatchWorkflowJob', '幂等原子派发业务任务', { auth: 'workflow', body: 'OrchestrationEmptyRequest', description: '同一事务创建Run、execution_job及后台关联和事件；重试返回同一Run。observe不创建attempt。取消/到期先于创建时永不启动；Schedule计数只在此事务占用。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
 operation('post', '/api/internal/workflow/jobs/{id}/cancel', 'cancelWorkflowJob', '按持久截止时间取消业务任务', { auth: 'workflow', body: 'WorkflowCancelRequest', description: 'reason=expired仅服务端deadlineAt已到期可接受；禁止Workflow延长或提前伪造截止时间。持久化取消意图不证明宿主进程已退出。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
+operation('post', '/api/internal/workflow/jobs/{id}/fail', 'failWorkflowJob', '记录后台任务编排失败', { auth: 'workflow', body: 'WorkflowFailRequest', description: '仅允许已绑定workerId的Workflow身份调用。errorCode限平台既有枚举；幂等保留终态，只将后台任务置failed并写background_job.failed事件，不修改Run、Session或execution_job，真实执行仍由Daemon管理。', responses: { '200': response('严格最小观察结构。', ref('JobObservation')) } });
 operation('get', '/api/internal/workflow/schedules/{id}', 'getWorkflowSchedule', '读取安全Schedule定义', { auth: 'workflow', responses: { '200': response('安全定义，仅用于同步Temporal Schedule。', ref('Schedule')) } });
 operation('post', '/api/internal/workflow/schedules/{id}/occurrences', 'admitScheduleOccurrence', '原子接纳稳定触发', { auth: 'workflow', body: 'ScheduleOccurrenceRequest', description: 'occurrenceId为稳定Temporal Workflow ID且全局唯一，同ID异定义409；同Schedule/版本/计划时间不会重复接纳。同触发重试返回相同结果，创建Job绑定occurrenceId且不再投递start_job命令；不会提前创建execution_job或消耗maxRuns。', responses: { '200': response('created与jobId或skipped。', ref('ScheduleOccurrenceResult')) } });
+for (const [path, methods] of Object.entries(paths)) {
+  if (/^\/api\/internal\/workflow\/(jobs|schedules)\//.test(path)) {
+    for (const operation of Object.values(methods)) operation.description += ' 校验认证身份等于资源持久workerId；未领取或不同Worker返回403，未知或关联归属无效返回404，拒绝前不刷新或改变业务事实。身份在command claim同事务绑定，Schedule occurrence的Job继承相同身份；重启后同workerId不需要命令lease或claimToken进入Workflow历史。';
+  }
+}
+paths['/api/internal/workflow/commands/claim'].post.description += ' 同事务持久绑定目标job/schedule的workerId；已绑定其他Worker的资源不能重领。';
+paths['/api/internal/workflow/commands/{id}/retry'].post.description += ' start_job永久失败或10次耗尽且未执行时，原子置后台任务failed/WORKFLOW_COMMAND_FAILED并写事件；已创建Run保持Daemon管理。过期第10次租约在下一claim清理时执行相同收敛。';
+paths['/api/background-jobs/{id}'].get.description += ' 到deadline时即使无Run、无Temporal也持久expired、取消意图及cancel_job命令；重复GET不重复事件。';
+paths['/api/internal/workflow/jobs/{id}'].get.description += ' 授权后到期检查与Console GET一致。';
+schemas.Schedule.description += ' run_count达到maxRuns的同一派发事务禁用Schedule、version加一并enqueue sync_schedule停止未来触发，不取消本次Run；Temporal不得以触发次数替代实际Run计数。';
 
 const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',

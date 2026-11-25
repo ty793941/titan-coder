@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { DomainError, backgroundJobCreateRequestSchema, backgroundJobSchema, jobExecutionSchema, jobObservationSchema, orchestrationErrorCodeSchema, orchestrationPageSchema, type ErrorCode } from '@titan/contracts';
-import { sql, type Selectable, type Transaction } from 'kysely';
+import { type Selectable, type Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
 import type { BackgroundJobTable, Database, ExecutionScheduleTable, SessionTable } from '../../database/types.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { RunsService, type RunCancellationActor } from '../runs/runs.service.js';
 import { EventsService } from '../events/events.service.js';
 import { WorkflowCommandsService } from './workflow-commands.service.js';
-import { lockSession, hasActiveRun, validateLocalSession } from './orchestration-policy.js';
+import { lockSession, lockBackgroundJob, requireAssignedWorker, hasActiveRun, validateLocalSession } from './orchestration-policy.js';
 
 const terminal = ['completed', 'failed', 'cancelled', 'expired'];
 
@@ -48,7 +48,7 @@ export class BackgroundJobsService {
 
   async insert(trx: Transaction<Database>, session: Selectable<SessionTable>, input: {
     kind: 'run' | 'observe'; planHash: string; deadlineAt: Date; runId?: string;
-    scheduleId?: string; definitionVersion?: number; workflowId?: string;
+    scheduleId?: string; definitionVersion?: number; workflowId?: string; workerId?: string;
   }) {
     const task = await trx.selectFrom('task').select('project_id').where('id', '=', session.task_id).executeTakeFirstOrThrow();
     const id = `bg_${randomUUID()}`;
@@ -56,31 +56,33 @@ export class BackgroundJobsService {
       id, project_id: task.project_id, task_id: session.task_id, session_id: session.id,
       kind: input.kind, run_id: input.runId ?? null, schedule_id: input.scheduleId ?? null, definition_version: input.definitionVersion ?? null,
       workflow_id: input.workflowId ?? `titan/background/${id}/v1`, deadline_at: input.deadlineAt, plan_hash: input.planHash, requested_by: 'local-user',
+      worker_id: input.workerId ?? null,
     }).returningAll().executeTakeFirstOrThrow();
     await this.event(trx, row, 'background_job.created');
     return row;
   }
 
-  async get(id: string) {
+  async get(id: string, workerId?: string) {
     return this.database.db.transaction().execute(async trx => {
       const { row } = await this.lock(trx, id);
+      if (workerId !== undefined) requireAssignedWorker(row.worker_id, workerId);
       return this.toView(await this.refresh(trx, row));
     });
   }
 
-  async observe(id: string) {
-    const view = await this.get(id);
+  async observe(id: string, workerId: string) {
+    const view = await this.get(id, workerId);
     return jobObservationSchema.parse({ jobId: view.jobId, status: view.status, deadlineAt: view.deadlineAt, ...(view.runId ? { runId: view.runId } : {}), ...(view.errorCode ? { errorCode: view.errorCode } : {}) });
   }
 
-  async execution(id: string) {
+  async execution(id: string, workerId: string) {
     const row = await this.database.db.selectFrom('background_job as job')
       .innerJoin('session', 'session.id', 'job.session_id')
       .innerJoin('task', 'task.id', 'session.task_id')
       .leftJoin('run', 'run.id', 'job.run_id')
       .leftJoin('execution_schedule as schedule', 'schedule.id', 'job.schedule_id')
       .leftJoin('schedule_occurrence as occurrence', 'occurrence.job_id', 'job.id')
-      .select(['job.id', 'job.workflow_id', 'job.workflow_version'])
+      .select(['job.id', 'job.workflow_id', 'job.workflow_version', 'job.worker_id'])
       .where('job.id', '=', id).whereRef('job.task_id', '=', 'task.id').whereRef('job.project_id', '=', 'task.project_id')
       .where(eb => eb.or([eb('job.run_id', 'is', null), eb('run.session_id', '=', eb.ref('session.id'))]))
       .where(eb => eb.or([
@@ -92,6 +94,7 @@ export class BackgroundJobsService {
         ]),
       ])).executeTakeFirst();
     if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'background job execution was not found');
+    requireAssignedWorker(row.worker_id, workerId);
     return jobExecutionSchema.parse({ jobId: row.id, workflowId: row.workflow_id, workflowVersion: row.workflow_version });
   }
 
@@ -104,9 +107,10 @@ export class BackgroundJobsService {
     return views;
   }
 
-  async dispatch(id: string) {
+  async dispatch(id: string, workerId: string) {
     await this.database.db.transaction().execute(async trx => {
       const { row, session, schedule } = await this.lock(trx, id);
+      requireAssignedWorker(row.worker_id, workerId);
       if (terminal.includes(row.status) || row.cancel_requested) return;
       if (row.deadline_at.getTime() <= Date.now()) { await this.cancelLocked(trx, row, 'expired'); return; }
       if (row.run_id) { await this.refresh(trx, row); return; }
@@ -125,24 +129,46 @@ export class BackgroundJobsService {
       const run = await this.runs.createInTransaction(trx, session.id, { planHash: row.plan_hash, idempotencyKey: row.id }, { idempotencyScope: `background:${row.id}:dispatch` });
       await trx.updateTable('background_job').set({ run_id: run.id, status: 'dispatching', version: row.version + 1 }).where('id', '=', id).execute();
       if (schedule) {
-        await trx.updateTable('execution_schedule').set({ run_count: schedule.run_count + 1 }).where('id', '=', schedule.id).execute();
+        const runCount = schedule.run_count + 1;
+        const exhausted = runCount >= schedule.max_runs;
+        await trx.updateTable('execution_schedule').set({ run_count: runCount,
+          ...(exhausted ? { enabled: false, version: schedule.version + 1, sync_status: 'pending_sync' } : {}),
+        }).where('id', '=', schedule.id).execute();
+        if (exhausted) {
+          await this.commands.enqueue(trx, 'sync_schedule', schedule.id, schedule.version + 1);
+          await this.events.append(trx, { eventType: 'schedule.max_runs_reached', projectId: schedule.project_id, taskId: schedule.task_id, sessionId: schedule.session_id,
+            actor: { type: 'system', id: 'control-plane' }, payload: { scheduleId: schedule.id, version: schedule.version + 1, runCount } });
+        }
         await trx.updateTable('schedule_occurrence').set({ status: 'dispatched' }).where('job_id', '=', id).execute();
       }
       await this.event(trx, { ...row, run_id: run.id, status: 'dispatching' }, 'background_job.dispatched');
     });
-    return this.observe(id);
+    return this.observe(id, workerId);
   }
 
-  async cancel(id: string, reason: 'cancelled' | 'expired' = 'cancelled', enqueue = true, actor: RunCancellationActor = { type: 'user', id: 'local-user' }) {
+  async cancel(id: string, reason: 'cancelled' | 'expired' = 'cancelled', enqueue = true, actor: RunCancellationActor = { type: 'user', id: 'local-user' }, workerId?: string) {
     await this.database.db.transaction().execute(async trx => {
       const { row } = await this.lock(trx, id);
+      if (workerId !== undefined) requireAssignedWorker(row.worker_id, workerId);
       const current = await this.refresh(trx, row);
       if (terminal.includes(current.status)) return;
       if (reason === 'expired' && current.deadline_at.getTime() > Date.now()) throw new DomainError('INVALID_STATE_TRANSITION', 'job has not reached its persisted deadline');
       await this.cancelLocked(trx, current, reason, actor);
       if (enqueue) await this.commands.enqueue(trx, 'cancel_job', id);
     });
-    return this.get(id);
+    return this.get(id, workerId);
+  }
+
+  async fail(id: string, errorCode: ErrorCode, workerId: string) {
+    await this.database.db.transaction().execute(async trx => {
+      const { row } = await this.lock(trx, id);
+      requireAssignedWorker(row.worker_id, workerId);
+      if (terminal.includes(row.status)) return;
+      const updated = await trx.updateTable('background_job').set({ status: 'failed', error_code: errorCode, version: row.version + 1 })
+        .where('id', '=', id).returningAll().executeTakeFirstOrThrow();
+      await this.event(trx, updated, 'background_job.failed', { type: 'system', id: workerId });
+    });
+    return this.observe(id, workerId);
   }
 
   async scheduleGate(trx: Transaction<Database>, session: Selectable<SessionTable>, schedule: Selectable<ExecutionScheduleTable>, definitionVersion: number): Promise<ErrorCode | undefined> {
@@ -164,22 +190,17 @@ export class BackgroundJobsService {
   }
 
   private async lock(trx: Transaction<Database>, id: string) {
-    // 先串行化同一后台任务，再按Daemon既有job→run→session顺序锁定，避免进度/取消死锁。
-    await sql`select pg_advisory_xact_lock(hashtextextended(${`background:${id}`}, 0))`.execute(trx);
-    const source = await trx.selectFrom('background_job').select(['session_id', 'schedule_id', 'run_id']).where('id', '=', id).executeTakeFirst();
-    if (!source) throw new DomainError('RESOURCE_NOT_FOUND', 'background job was not found');
-    if (source.run_id) {
-      await trx.selectFrom('execution_job').select('id').where('run_id', '=', source.run_id).forUpdate().execute();
-      await trx.selectFrom('run').select('id').where('id', '=', source.run_id).forNoKeyUpdate().execute();
-    }
-    const session = await lockSession(trx, source.session_id);
-    const schedule = source.schedule_id ? await trx.selectFrom('execution_schedule').selectAll().where('id', '=', source.schedule_id).forUpdate().executeTakeFirstOrThrow() : undefined;
-    const row = await trx.selectFrom('background_job').selectAll().where('id', '=', id).forUpdate().executeTakeFirstOrThrow();
-    return { row, session, schedule };
+    return (await lockBackgroundJob(trx, id))!;
   }
 
   private async refresh(trx: Transaction<Database>, row: Selectable<BackgroundJobTable>) {
-    if (!row.run_id || terminal.includes(row.status) || row.cancel_requested) return row;
+    if (terminal.includes(row.status) || row.cancel_requested) return row;
+    if (row.deadline_at.getTime() <= Date.now()) {
+      const updated = await this.cancelLocked(trx, row, 'expired');
+      await this.commands.enqueue(trx, 'cancel_job', row.id);
+      return updated;
+    }
+    if (!row.run_id) return row;
     const run = await trx.selectFrom('run').select(['status', 'error_code']).where('id', '=', row.run_id).executeTakeFirstOrThrow();
     const status = ['queued', 'starting'].includes(run.status) ? 'dispatching' : run.status === 'paused' ? 'waiting_input' : run.status;
     const safe = orchestrationErrorCodeSchema.safeParse(run.error_code);
@@ -193,8 +214,9 @@ export class BackgroundJobsService {
 
   private async cancelLocked(trx: Transaction<Database>, row: Selectable<BackgroundJobTable>, reason: 'cancelled' | 'expired', actor: RunCancellationActor = { type: 'system', id: 'control-plane' }) {
     if (row.run_id) await this.runs.cancelInTransaction(trx, row.run_id, actor);
-    await trx.updateTable('background_job').set({ status: reason, cancel_requested: true, error_code: reason === 'expired' ? 'BACKGROUND_JOB_EXPIRED' : null, version: row.version + 1 }).where('id', '=', row.id).execute();
-    await this.event(trx, { ...row, status: reason }, 'background_job.cancel_requested', actor);
+    const updated = await trx.updateTable('background_job').set({ status: reason, cancel_requested: true, error_code: reason === 'expired' ? 'BACKGROUND_JOB_EXPIRED' : null, version: row.version + 1 }).where('id', '=', row.id).returningAll().executeTakeFirstOrThrow();
+    await this.event(trx, updated, 'background_job.cancel_requested', actor);
+    return updated;
   }
 
   private async skipScheduled(trx: Transaction<Database>, row: Selectable<BackgroundJobTable>, reason: ErrorCode) {

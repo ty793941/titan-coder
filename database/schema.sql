@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS execution_schedule (
   temporal_schedule_id TEXT NOT NULL UNIQUE,
   version INTEGER NOT NULL DEFAULT 1,
   requested_by TEXT NOT NULL,
+  worker_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((cron IS NULL) <> (interval_seconds IS NULL))
 );
@@ -329,6 +330,7 @@ CREATE TABLE IF NOT EXISTS background_job (
   cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
   error_code TEXT,
   requested_by TEXT NOT NULL,
+  worker_id TEXT,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((schedule_id IS NULL) = (definition_version IS NULL))

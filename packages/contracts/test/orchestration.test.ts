@@ -5,6 +5,13 @@ const job = { kind: 'run', runInBackground: true, planHash: `sha256:${'a'.repeat
 const schedule = { planHash: job.planHash, timezone: 'Asia/Shanghai', intervalSeconds: 60, startsAt: '2026-12-01T00:00:00.000Z', endsAt: '2026-12-02T00:00:00.000Z', maxRuns: 2, overlapPolicy: 'skip', enabled: false, idempotencyKey: 'schedule-1' };
 
 describe('strict persistent orchestration contracts', () => {
+  it('accepts only a fixed error code when a workflow reports background job failure', () => {
+    expect(contracts).toHaveProperty('workflowFailRequestSchema');
+    expect(contracts.workflowFailRequestSchema.parse({ errorCode: 'WORKFLOW_COMMAND_FAILED' })).toEqual({ errorCode: 'WORKFLOW_COMMAND_FAILED' });
+    for (const input of [{}, { errorCode: 'unsafe' }, { errorCode: 'WORKFLOW_COMMAND_FAILED', message: 'unsafe' }]) {
+      expect(contracts.workflowFailRequestSchema.safeParse(input).success).toBe(false);
+    }
+  });
   it('exports ID-only execution metadata without expanding observations', () => {
     expect(contracts).toHaveProperty('jobExecutionSchema');
     const metadata = { jobId: 'bg_1', workflowId: 'titan/occurrence/test-1', workflowVersion: 1 };

@@ -8,7 +8,7 @@ import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
 import { BackgroundJobsService } from './background-jobs.service.js';
 import { WorkflowCommandsService } from './workflow-commands.service.js';
-import { lockSession, validateLocalSession } from './orchestration-policy.js';
+import { lockSession, lockSchedule, requireAssignedWorker, validateLocalSession } from './orchestration-policy.js';
 
 type Definition = ReturnType<typeof scheduleUpdateRequestSchema.parse>;
 const definitionColumns = (input: Omit<Definition, 'expectedVersion'>) => ({
@@ -49,9 +49,10 @@ export class SchedulesService {
     });
   }
 
-  async get(id: string) {
+  async get(id: string, workerId?: string) {
     const row = await this.database.db.selectFrom('execution_schedule').selectAll().where('id', '=', id).executeTakeFirst();
     if (!row) throw new DomainError('RESOURCE_NOT_FOUND', 'schedule was not found');
+    if (workerId !== undefined) requireAssignedWorker(row.worker_id, workerId);
     return this.toView(row);
   }
 
@@ -84,10 +85,11 @@ export class SchedulesService {
     });
   }
 
-  async occurrence(id: string, input: unknown) {
+  async occurrence(id: string, input: unknown, workerId: string) {
     const parsed = scheduleOccurrenceRequestSchema.parse(input);
     return this.database.db.transaction().execute(async trx => {
       const { row, session } = await this.lock(trx, id);
+      requireAssignedWorker(row.worker_id, workerId);
       const existing = await trx.selectFrom('schedule_occurrence').selectAll().where('occurrence_id', '=', parsed.occurrenceId).executeTakeFirst();
       if (existing) {
         if (existing.schedule_id !== id || existing.definition_version !== parsed.definitionVersion || existing.scheduled_at.getTime() !== Date.parse(parsed.scheduledAt)) {
@@ -109,7 +111,7 @@ export class SchedulesService {
         const { config } = await validateLocalSession(trx, session, row.plan_hash);
         const job = await this.jobs.insert(trx, session, { kind: 'run', planHash: row.plan_hash,
           deadlineAt: new Date(Math.min(row.ends_at.getTime(), now + config.timeoutMs)), scheduleId: id,
-          definitionVersion: parsed.definitionVersion, workflowId: parsed.occurrenceId,
+          definitionVersion: parsed.definitionVersion, workflowId: parsed.occurrenceId, workerId,
         });
         jobId = job.id;
         if (catchup) await trx.updateTable('execution_schedule').set({ catchup_until: new Date(now + row.catchup_window_seconds * 1000) }).where('id', '=', id).execute();
@@ -124,11 +126,7 @@ export class SchedulesService {
   }
 
   private async lock(trx: Transaction<Database>, id: string) {
-    const source = await trx.selectFrom('execution_schedule').select('session_id').where('id', '=', id).executeTakeFirst();
-    if (!source) throw new DomainError('RESOURCE_NOT_FOUND', 'schedule was not found');
-    const session = await lockSession(trx, source.session_id);
-    const row = await trx.selectFrom('execution_schedule').selectAll().where('id', '=', id).forUpdate().executeTakeFirstOrThrow();
-    return { row, session };
+    return (await lockSchedule(trx, id))!;
   }
 
   private toView(row: Selectable<ExecutionScheduleTable>) {
