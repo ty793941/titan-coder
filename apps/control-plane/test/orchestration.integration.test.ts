@@ -210,6 +210,9 @@ it('applies the migration twice without creating fake jobs and uses TEXT foreign
     for (let pass = 0; pass < 2; pass++) for (const file of ['schema.sql', 'init-data.sql']) await client.query(await readFile(new URL(`../../../database/${file}`, import.meta.url), 'utf8'));
     const columns = await client.query('SELECT table_name, data_type FROM information_schema.columns WHERE table_schema=$1 AND table_name=ANY($2) AND column_name=$3', [schema, ['background_job', 'workflow_command', 'execution_schedule', 'schedule_occurrence'], 'id']);
     expect(columns.rows).toHaveLength(4); expect(columns.rows.every(row => row.data_type === 'text')).toBe(true);
+    const bindings = await client.query('SELECT table_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name=ANY($2) AND column_name=$3', [schema, ['background_job', 'execution_schedule'], 'worker_id']);
+    expect(bindings.rows).toHaveLength(2);
+    expect(bindings.rows.every(row => row.data_type === 'text' && row.is_nullable === 'YES')).toBe(true);
   } finally { client.release(); }
 });
 
@@ -609,4 +612,57 @@ it('disables and syncs a schedule at its final atomic dispatch while preserving 
   expect((await request(`/schedules/${schedule.id}`)).body).toMatchObject({ enabled: false, runCount: 1, version: 3, syncStatus: 'pending_sync' });
   expect(await db.selectFrom('workflow_command').selectAll().where('target_id', '=', schedule.id).where('definition_version', '=', 3).execute()).toHaveLength(1);
   expect(await db.selectFrom('run').selectAll().where('id', '=', replies[0].body.runId).executeTakeFirstOrThrow()).toMatchObject({ status: 'queued' });
+});
+
+it('rolls back target worker binding with a failed command claim and never reassigns it to another identity', async () => {
+  const f = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const job = (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body;
+  await admin.query(`ALTER TABLE ${schema}.workflow_command ADD CONSTRAINT reject_claim CHECK (status <> 'claimed') NOT VALID`);
+  try { expect((await rawInternal('/commands/claim', { workerId: 'worker_test' })).status).toBe(500); }
+  finally { await admin.query(`ALTER TABLE ${schema}.workflow_command DROP CONSTRAINT reject_claim`); }
+  expect(await db.selectFrom('background_job').select('worker_id').where('id', '=', job.jobId).executeTakeFirstOrThrow()).toEqual({ worker_id: null });
+  expect(await db.selectFrom('workflow_command').select(['attempts', 'worker_id', 'status']).where('target_id', '=', job.jobId).executeTakeFirstOrThrow()).toEqual({ attempts: 0, worker_id: null, status: 'pending' });
+  const command = await claimTarget(job.jobId);
+  await db.updateTable('workflow_command').set({ lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', command.id).execute();
+  const { WorkflowAuth } = await import('../dist/common/workflow-auth.js');
+  const auth = app.get(WorkflowAuth);
+  await auth.initialize({ workerId: 'worker_other', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken);
+  try { expect((await rawInternal('/commands/claim', { workerId: 'worker_other' })).status).toBe(204); }
+  finally { await auth.initialize({ workerId: 'worker_test', credentialRef: 'keychain://synthetic-workflow' }, async () => workflowToken); }
+  expect(await db.selectFrom('background_job').select('worker_id').where('id', '=', job.jobId).executeTakeFirstOrThrow()).toEqual({ worker_id: 'worker_test' });
+  expect((await rawInternal('/commands/claim', { workerId: 'worker_test' })).body.id).toBe(command.id);
+});
+
+it.each(['job', 'schedule', 'exhausted_job'] as const)('skips a locked %s domain target without binding or starving an independent Session', async kind => {
+  const f = await fixture(); const g = await fixture();
+  await db.updateTable('workflow_command').set({ status: 'completed' }).execute();
+  const target = kind === 'schedule'
+    ? (await request(`/sessions/${f.session.id}/schedules`, f.scheduleInput)).body.id
+    : (await request(`/sessions/${f.session.id}/background-jobs`, f.jobInput)).body.jobId;
+  if (kind === 'exhausted_job') {
+    const command = await claimTarget(target);
+    await db.updateTable('workflow_command').set({ attempts: 10, lease_expires_at: new Date(Date.now() - 1) }).where('id', '=', command.id).execute();
+  }
+  const other = (await request(`/sessions/${g.session.id}/background-jobs`, g.jobInput)).body;
+  let claim: ReturnType<typeof rawInternal> | undefined;
+  let returnedWhileLocked = false;
+  await db.transaction().execute(async trx => {
+    await trx.selectFrom('session').select('id').where('id', '=', f.session.id).forUpdate().execute();
+    claim = rawInternal('/commands/claim', { workerId: 'worker_test' });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([claim.then(() => { returnedWhileLocked = true; }), new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
+    clearTimeout(timer);
+  });
+  expect(returnedWhileLocked).toBe(true);
+  expect((await claim!).body.targetId).toBe(other.jobId);
+  if (kind === 'exhausted_job') {
+    expect(await db.selectFrom('background_job').select('status').where('id', '=', target).executeTakeFirstOrThrow()).toEqual({ status: 'pending_dispatch' });
+    await rawInternal('/commands/claim', { workerId: 'worker_test' });
+    expect((await request(`/background-jobs/${target}`)).body).toMatchObject({ status: 'failed', errorCode: 'WORKFLOW_COMMAND_FAILED' });
+  } else {
+    const table = kind === 'schedule' ? 'execution_schedule' : 'background_job';
+    expect(await db.selectFrom(table).select('worker_id').where('id', '=', target).executeTakeFirstOrThrow()).toEqual({ worker_id: null });
+    expect((await claimTarget(target)).targetId).toBe(target);
+  }
 });
