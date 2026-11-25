@@ -1,10 +1,6 @@
 # 本机 Temporal 开发基础设施
 
-本配置为 Titan 的本机 Temporal 开发环境。它使用官方固定镜像
-`temporalio/temporal:1.5.1`，当前 Apple Silicon 主机锁定到
-`sha256:33cafeff516ee864c73018f0ce6b2b61d2921fce45c1943b0b6619b27502b778`
-（`linux/arm64`）。该配置只用于开发验收，不生产使用，也不替代正式的 Temporal
-集群、备份和高可用方案。
+本配置为 Titan 的本机 Temporal 开发环境。它使用官方固定镜像 `temporalio/temporal:1.5.1`，当前 Apple Silicon 主机锁定到 `sha256:33cafeff516ee864c73018f0ce6b2b61d2921fce45c1943b0b6619b27502b778`（`linux/arm64`）。该配置只用于开发验收，不生产使用，也不替代正式的 Temporal 集群、备份和高可用方案。
 
 ## 启动
 
@@ -19,9 +15,7 @@ docker compose -p titan-temporal -f infra/temporal.compose.yml --profile tempora
 - gRPC：`127.0.0.1:7233`
 - Web UI（可选）：`http://127.0.0.1:8233`
 
-服务命令使用 `start-dev --ip=0.0.0.0 --db-filename=/data/temporal.db --namespace=titan`。
-容器内的 `0.0.0.0` 只用于让 Docker 端口转发访问服务；宿主机发布端口仍严格绑定到
-`127.0.0.1`。
+服务命令使用 `start-dev --ip=0.0.0.0 --db-filename=/data/temporal.db --namespace=titan`。容器内的 `0.0.0.0` 只用于让 Docker 端口转发访问服务；宿主机发布端口仍严格绑定到 `127.0.0.1`。
 
 ## 健康检查
 
@@ -48,13 +42,11 @@ TITAN_TEMPORAL_ADDRESS=127.0.0.1:7233
 TITAN_TEMPORAL_NAMESPACE=titan
 ```
 
-示例中的 `credentialRef` 只是 macOS Keychain 引用，不是凭证值。API Key、Token 和其他
-secret 不得写入该 JSON、环境变量、命令行参数、日志或普通配置文件。
+示例中的 `credentialRef` 只是 macOS Keychain 引用，不是凭证值。API Key、Token 和其他 Secret 不得写入该 JSON、环境变量、命令行参数、日志或普通配置文件。Worker 实际使用 `--config` 中的地址和 namespace；测试环境变量不会自动覆盖其配置。完整身份和启动步骤见 `docs/temporal-acceptance.md`。
 
 ## 持久化与停止
 
-SQLite 文件位于容器内 `/data/temporal.db`，通过 Compose 私有命名卷
-`titan-temporal-data` 持久化。普通服务重启或重新创建容器会保留 workflow 状态：
+SQLite 文件位于容器内 `/data/temporal.db`，通过 Compose 私有命名卷 `titan-temporal-data` 持久化。普通服务重启或重新创建容器会保留 Workflow 状态：
 
 ```bash
 docker compose -p titan-temporal -f infra/temporal.compose.yml --profile temporal restart temporal
@@ -67,17 +59,14 @@ docker compose -p titan-temporal -f infra/temporal.compose.yml --profile tempora
 docker compose -p titan-temporal -f infra/temporal.compose.yml --profile temporal down
 ```
 
-不要使用 `down --volumes`，因为它会删除本机 SQLite 数据。该配置不会自动删除容器或卷；
-如需回收资源，必须由操作者明确执行并先确认数据范围。
+不要使用 `down --volumes`，因为它会删除本机 SQLite 数据。该配置不会自动删除容器或卷；如需回收资源，必须由操作者明确执行并先确认数据范围。
 
 ## 镜像核验
 
-更新镜像版本前，必须核对官方 manifest，并在 Compose 中同时保留固定版本 tag 和目标平台
-digest；禁止改成 `latest`：
+更新镜像版本前，必须核对官方 manifest，并在 Compose 中同时保留固定版本 tag 和目标平台 digest；禁止改成 `latest`：
 
 ```bash
 docker manifest inspect temporalio/temporal:1.5.1
 ```
 
-本配置的 digest 是本机 `linux/arm64` manifest digest。其他架构必须选择对应官方 digest，
-不能复用该 digest。
+本配置的 digest 是本机 `linux/arm64` manifest digest。其他架构必须选择对应官方 digest，不能复用该 digest。

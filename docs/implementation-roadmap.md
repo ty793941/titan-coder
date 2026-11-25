@@ -148,7 +148,17 @@ Phase 5  高级自动化：Teams、Cron、Workflow Marketplace、规模化部署
 - Control Plane 支持 Handoff、Cloud Execution 生命周期、失联 fencing、旧 Run Snapshot ACK 拒绝、Cloud Artifact 宿主路径校验和 SSE/Outbox 事件。
 - `apps/agent-runtime/Dockerfile` 提供非 root、只读根、受限网络和 Linux Codex 版本固定的 Session 镜像。
 
-Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](cloud-worker-acceptance.md)。真实 Temporal、Redis、MinIO/S3、Vault/KMS、Kubernetes、生产级 Secret Broker 和多租户调度仍属于后续 Phase 2/4 治理范围。
+Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](cloud-worker-acceptance.md)。Phase 2A 当时未接入 Temporal，当前编排进展见下方 Phase 2B；Redis Streams、MinIO/S3、Vault/KMS、Kubernetes、生产级 Secret Broker 和多租户调度仍属于后续治理范围。
+
+### 3.2 Phase 2B 已实现边界
+
+- 已接入固定版本 Temporal TypeScript SDK、独立 Workflow Worker 和本机持久 Temporal 开发服务。
+- 后台任务采用专用命令 Outbox、固定 Workflow ID、幂等派发、持久 Timer、重试、取消和 Continue-As-New；业务状态仍由 PostgreSQL 维护。
+- 支持已有本机/云端 Run 的持续观察，以及已批准本机 Session 的有限次数 Schedule；默认未启用，支持时区、版本、暂停、错过窗口及禁止重叠。
+- Workflow 服务身份通过 Keychain 或受控 stdin 引入，领取命令后按任务/调度绑定；模型凭证、Prompt 和完整执行上下文不进入 Temporal 历史。
+- 已包含旧数据库身份字段升级、失败/到期收敛、命令队列公平领取、旧版 Schedule 并发同步和实际 Run 次数控制。
+
+操作与完成证据见 [`docs/temporal-acceptance.md`](temporal-acceptance.md) 和 [`docs/phase-2b-review.md`](phase-2b-review.md)。Temporal 本机编排已落地；远程 Git/Snapshot 传输、生产对象存储与 Secret Broker、定时 cloud Session 和生产集群仍为后续切片，不能把 Phase 2B 等同于整个 Phase 2 完成。
 
 ## 4. Phase 3：Web UI 与多人协作
 
