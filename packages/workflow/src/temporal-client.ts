@@ -136,7 +136,7 @@ class TemporalClientAdapter implements TemporalOrchestrationClient {
           spec: definition.spec,
           action: definition.action,
           policies: definition.policies!,
-          state: { paused: !schedule.enabled, remainingActions: Math.max(0, schedule.maxRuns - schedule.runCount) },
+          state: { paused: !schedule.enabled },
         })));
       } catch (updateError) {
         throw toTemporalError(updateError);
@@ -224,7 +224,6 @@ function makeScheduleOptions(schedule: Schedule, scheduleId: string, taskQueue: 
     memo: { titanScheduleId: schedule.id, titanDefinitionVersion: schedule.version },
     state: {
       paused: !schedule.enabled,
-      remainingActions: Math.max(0, schedule.maxRuns - schedule.runCount),
     },
   };
 }
