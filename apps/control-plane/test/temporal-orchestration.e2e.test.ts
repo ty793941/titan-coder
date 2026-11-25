@@ -225,6 +225,7 @@ suite('real Temporal orchestration', () => {
       dispatchJob: async (input: { jobId: string; workflowVersion: 1 }) => (await workflowRequest(`/jobs/${input.jobId}/dispatch`, {})).body,
       observeJob: async (input: { jobId: string; workflowVersion: 1 }) => (await workflowRequest(`/jobs/${input.jobId}`)).body,
       cancelJob: async (input: { jobId: string; workflowVersion: 1; reason: 'cancelled' | 'expired' }) => (await workflowRequest(`/jobs/${input.jobId}/cancel`, { reason: input.reason })).body,
+      failJob: async (input: { jobId: string; workflowVersion: 1; errorCode: string }) => (await workflowRequest(`/jobs/${input.jobId}/fail`, { errorCode: input.errorCode })).body,
       scheduleOccurrence: async () => ({ status: 'skipped' }),
     };
     let worker = await startWorker(activities);
@@ -266,6 +267,8 @@ suite('real Temporal orchestration', () => {
 
   it('keeps sensitive progress values out of persisted execution history', async () => {
     const fixture = await createFixture();
+    const command = await claimStartCommand();
+    expect(command.targetId).toBe(fixture.job.jobId);
     const dispatched = await workflowRequest(`/jobs/${fixture.job.jobId}/dispatch`, {});
     expect(dispatched.status).toBe(200);
     const execution = await fixture.daemonFixture.claimExecution();
