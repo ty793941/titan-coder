@@ -1,6 +1,7 @@
 import {
   ApplicationFailure,
   CancellationScope,
+  ContinueAsNew,
   condition,
   continueAsNew,
   defineSignal,
@@ -10,6 +11,7 @@ import {
   setHandler,
   workflowInfo,
 } from '@temporalio/workflow';
+import type { ErrorCode } from '@titan/contracts';
 import type {
   BackgroundJobResult,
   JobInput,
@@ -18,6 +20,7 @@ import type {
   ScheduleOccurrenceInput,
   ScheduledOccurrenceWorkflowResult,
 } from './types.js';
+import { isSafeErrorCode } from './types.js';
 
 export const OBSERVE_INTERVAL_MS = 5_000;
 export const HISTORY_CONTINUE_AS_NEW_THRESHOLD = 1_000;
@@ -27,6 +30,15 @@ const activities = proxyActivities<OrchestrationActivities>({
   startToCloseTimeout: '1 minute',
   retry: {
     maximumAttempts: 3,
+    initialInterval: '1 second',
+    maximumInterval: '10 seconds',
+    backoffCoefficient: 2,
+  },
+});
+
+const failureActivities = proxyActivities<Pick<OrchestrationActivities, 'failJob'>>({
+  startToCloseTimeout: '10 seconds',
+  retry: {
     initialInterval: '1 second',
     maximumInterval: '10 seconds',
     backoffCoefficient: 2,
@@ -113,9 +125,35 @@ async function monitorJob(
   }
 }
 
+async function monitorJobWithFailureReport(
+  input: JobInput,
+  initialObservation: () => Promise<JobObservation>,
+  continueWorkflow: () => Promise<never>,
+): Promise<BackgroundJobResult> {
+  try {
+    return await monitorJob(input, initialObservation, continueWorkflow);
+  } catch (error) {
+    if (error instanceof ContinueAsNew || isCancellation(error)) throw error;
+    const errorCode = safeFailureCode(error);
+    await CancellationScope.nonCancellable(() => failureActivities.failJob({ ...input, errorCode }));
+    throw ApplicationFailure.nonRetryable(errorCode, errorCode);
+  }
+}
+
+function safeFailureCode(error: unknown): ErrorCode {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object') break;
+    const type = 'type' in current ? (current as { type?: unknown }).type : undefined;
+    if (isSafeErrorCode(type)) return type;
+    current = 'cause' in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return 'WORKFLOW_COMMAND_FAILED';
+}
+
 export async function backgroundJobV1(input: JobInput): Promise<BackgroundJobResult> {
   const continued = workflowInfo().continuedFromExecutionRunId !== undefined;
-  return monitorJob(
+  return monitorJobWithFailureReport(
     input,
     () => continued ? activities.observeJob(input) : activities.dispatchJob(input),
     () => continueAsNew<typeof backgroundJobV1>(input),
@@ -148,7 +186,7 @@ export async function scheduledOccurrenceV1(
   const jobInput: JobInput = { jobId: occurrence.jobId, workflowVersion: 1 };
   // 在同一 Workflow ID 下继续观察该 job，不重新接纳 occurrence 或创建第二条 Workflow。
   const continueJob = makeContinueAsNewFunc<typeof backgroundJobV1>({ workflowType: 'backgroundJobV1' });
-  const result = await monitorJob(
+  const result = await monitorJobWithFailureReport(
     jobInput,
     () => activities.dispatchJob(jobInput),
     () => continueJob(jobInput),

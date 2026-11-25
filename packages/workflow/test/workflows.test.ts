@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { ApplicationFailure } from '@temporalio/client';
 import { Worker } from '@temporalio/worker';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import type {
@@ -69,6 +70,9 @@ describe('persistent Temporal workflows', () => {
         async cancelJob(value) {
           return observation(value, value.reason === 'expired' ? 'expired' : 'cancelled');
         },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
+        },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
         },
@@ -88,6 +92,70 @@ describe('persistent Temporal workflows', () => {
     }
   });
 
+  it.each([
+    { errorCode: 'DAEMON_UNAVAILABLE' as const, retryable: true, reportFailures: 4, dispatchAttempts: 3 },
+    { errorCode: 'VERSION_CONFLICT' as const, retryable: false, reportFailures: 0, dispatchAttempts: 1 },
+  ])('reports $errorCode after dispatch failure without dispatching a new run', async ({ errorCode, retryable, reportFailures, dispatchAttempts }) => {
+    const environment = await TestWorkflowEnvironment.createTimeSkipping();
+    const input: JobInput = { jobId: `job_failure_${errorCode.toLowerCase()}`, workflowVersion: 1 };
+    let dispatchCalls = 0;
+    let failJobCalls = 0;
+    let failedObservation: JobObservation | undefined;
+
+    try {
+      const activities: OrchestrationActivities = {
+        async dispatchJob() {
+          dispatchCalls += 1;
+          throw ApplicationFailure.create({ message: errorCode, type: errorCode, nonRetryable: !retryable });
+        },
+        async observeJob(value) {
+          return observation(value, 'pending_dispatch');
+        },
+        async cancelJob(value) {
+          return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          failJobCalls += 1;
+          if (failJobCalls <= reportFailures) {
+            throw ApplicationFailure.create({ message: 'DAEMON_UNAVAILABLE', type: 'DAEMON_UNAVAILABLE', nonRetryable: false });
+          }
+          failedObservation = { ...observation(value, 'failed'), errorCode: value.errorCode };
+          return failedObservation;
+        },
+        async scheduleOccurrence() {
+          return { status: 'created', jobId: 'unused' };
+        },
+      };
+      const worker = await Worker.create({
+        connection: environment.nativeConnection,
+        namespace: environment.namespace,
+        taskQueue,
+        workflowsPath: new URL('../src/workflows.ts', import.meta.url).pathname,
+        activities,
+      });
+      const handle = await environment.client.workflow.start('backgroundJobV1', {
+        args: [input],
+        taskQueue,
+        workflowId: `failure-${randomUUID()}`,
+      });
+      const resultPromise = handle.result();
+      await worker.runUntil((async () => {
+        await expect(resultPromise).rejects.toBeTruthy();
+      })());
+
+      expect(dispatchCalls).toBe(dispatchAttempts);
+      expect(failJobCalls).toBe(reportFailures + 1);
+      expect(failedObservation).toEqual({
+        jobId: input.jobId,
+        status: 'failed',
+        deadlineAt: '2099-01-01T00:00:00.000Z',
+        errorCode,
+      });
+    } finally {
+      await environment.teardown();
+    }
+  }, 60_000);
+
   it('waits through waiting_input and reconnecting without dispatching another attempt', async () => {
     const environment = await TestWorkflowEnvironment.createTimeSkipping();
     let dispatchCalls = 0;
@@ -106,6 +174,9 @@ describe('persistent Temporal workflows', () => {
         },
         async cancelJob(value) {
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
@@ -137,6 +208,9 @@ describe('persistent Temporal workflows', () => {
         async cancelJob(value) {
           cancelReason = value.reason;
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
@@ -184,6 +258,9 @@ describe('persistent Temporal workflows', () => {
         async cancelJob(value) {
           cancelReason = value.reason;
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
@@ -235,6 +312,9 @@ describe('persistent Temporal workflows', () => {
           cancelReason = value.reason;
           return observation(value, 'expired', '2000-01-01T00:00:00.000Z');
         },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
+        },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
         },
@@ -270,6 +350,9 @@ describe('persistent Temporal workflows', () => {
         },
         async cancelJob(value) {
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence(value) {
           occurrenceInput = value;
@@ -311,6 +394,7 @@ describe('persistent Temporal workflows', () => {
           return observation(value, observes > 1 ? 'completed' : 'running');
         },
         async cancelJob(value) { return observation(value, 'expired', deadlineAt); },
+        async failJob(value) { return { ...observation(value, 'failed'), errorCode: value.errorCode }; },
         async scheduleOccurrence() { return { status: 'skipped' }; },
       };
       const handle = await runWorkflow(environment, 'backgroundJobV1', activities, input);
@@ -338,6 +422,9 @@ describe('persistent Temporal workflows', () => {
         },
         async cancelJob(value) {
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           activityCalls += 1;
@@ -372,6 +459,9 @@ describe('persistent Temporal workflows', () => {
         },
         async cancelJob(value) {
           return observation(value, value.reason === 'expired' ? 'expired' : 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
@@ -412,6 +502,9 @@ describe('persistent Temporal workflows', () => {
         },
         async cancelJob(value) {
           return observation(value, 'cancelled');
+        },
+        async failJob(value) {
+          return { ...observation(value, 'failed'), errorCode: value.errorCode };
         },
         async scheduleOccurrence() {
           return { status: 'created', jobId: 'unused' };
@@ -465,6 +558,7 @@ describe('persistent Temporal workflows', () => {
         },
         async observeJob(value) { return observation(value, 'completed'); },
         async cancelJob(value) { return observation(value, 'cancelled'); },
+        async failJob(value) { return { ...observation(value, 'failed'), errorCode: value.errorCode }; },
       };
       const handle = await environment.client.workflow.start('scheduledOccurrenceV1', {
         args: [{ scheduleId: 'schedule_continue', definitionVersion: 1 }], taskQueue, workflowId,
@@ -506,6 +600,7 @@ describe('persistent Temporal workflows', () => {
         async dispatchJob(value) { dispatches += 1; return observation(value, 'completed'); },
         async observeJob(value) { return observation(value, 'completed'); },
         async cancelJob(value) { cancelledJob = value.jobId; return observation(value, 'cancel_requested'); },
+        async failJob(value) { return { ...observation(value, 'failed'), errorCode: value.errorCode }; },
       };
       const handle = await environment.client.workflow.start('scheduledOccurrenceV1', {
         args: [{ scheduleId: 'schedule_admission', definitionVersion: 1 }], taskQueue,

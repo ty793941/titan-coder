@@ -117,6 +117,29 @@ describe('ControlPlaneClient', () => {
     });
   });
 
+  it('reports a safe job failure through the workflow endpoint', async () => {
+    const baseUrl = await listen((request, response) => {
+      expect(request.method).toBe('POST');
+      expect(request.url).toBe('/api/internal/workflow/jobs/job_1/fail');
+      expect(request.headers.authorization).toBe('Bearer workflow-secret-1');
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', chunk => { body += chunk; });
+      request.on('end', () => {
+        expect(JSON.parse(body)).toEqual({ errorCode: 'VERSION_CONFLICT' });
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          jobId: 'job_1', status: 'failed', deadlineAt: '2099-01-01T00:00:00.000Z', errorCode: 'VERSION_CONFLICT',
+        }));
+      });
+    });
+    const client = new ControlPlaneClient({ baseUrl, bearer: 'workflow-secret-1' });
+
+    await expect(client.failJob({ jobId: 'job_1', workflowVersion: 1, errorCode: 'VERSION_CONFLICT' })).resolves.toEqual({
+      jobId: 'job_1', status: 'failed', deadlineAt: '2099-01-01T00:00:00.000Z', errorCode: 'VERSION_CONFLICT',
+    });
+  });
+
   it('bounds JSON response size at two MiB', async () => {
     const baseUrl = await listen((_request, response) => {
       response.setHeader('content-type', 'application/json');
