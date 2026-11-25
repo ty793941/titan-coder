@@ -12,7 +12,7 @@
 
 ## 共同约束与接口
 
-执行记录（2026-11-25）：任务1–6和任务7的评审/门禁/文档已完成。实际数据库、Schedule 和命令测试集中于 `apps/control-plane/test/orchestration.integration.test.ts`、`orchestration-schema.integration.test.ts`；真实进程验收位于 `temporal-orchestration.e2e.test.ts` 和 `temporal-worker-cli.e2e.test.ts`。本机服务固定为官方 CLI 镜像1.5.1及已核验ARM64 digest。最终617项通过、无失败和跳过，详细证据见 `docs/phase-2b-review.md`。最后提交推送状态以本计划末项及 Git 远端核对结果为准。
+执行记录（2026-11-25）：任务1–7已完成，交付提交 `fb7e732` 已通过代理推送至 `origin/chore/initial-project`。实际数据库、Schedule 和命令测试集中于 `apps/control-plane/test/orchestration.integration.test.ts`、`orchestration-schema.integration.test.ts`；真实进程验收位于 `temporal-orchestration.e2e.test.ts` 和 `temporal-worker-cli.e2e.test.ts`。本机服务固定为官方 CLI 镜像1.5.1及已核验ARM64 digest。最终617项通过、无失败和跳过，详细证据见 `docs/phase-2b-review.md`。
 
 每项按失败测试、观察红灯、最小实现、绿灯、差异检查、提交推进。数据库测试使用独立 schema，真实模型不参与验收。根工作区缺少 `.git` 文件，Git 操作沿用当前会话显式 `--git-dir`、`--work-tree`；各实现隔离工作树可使用普通 Git。用户 `docs/study.html` 始终排除。
 
@@ -153,7 +153,7 @@ export interface OrchestrationActivities {
 - [x] 只读 Reviewer 检查任务重复、两个事实库一致性、取消竞态、Schedule 时间/限次、服务身份与历史脱敏；修复可操作发现并保留红绿证据。
 - [x] 执行 `pnpm build`、`pnpm typecheck`、`pnpm lint`，以及基线所有真实 Docker/原生 Codex专项和新增 Temporal 门禁。测试在包目录或Turbo包脚本运行，避免扫描 `.titan/workers`。
 - [x] 文档记录实际 SDK/服务版本、启动命令、Keychain/受控 stdin 身份配置、关闭与恢复、失败诊断、真实测试数量和未包含项。
-- [ ] 检查差异、仅提交相关文件，沿用 `HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890 git push origin chore/initial-project` 推送。
+- [x] 检查差异、仅提交相关文件，沿用 `HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890 git push origin chore/initial-project` 推送。
 
 ## 分工与完成状态
 
