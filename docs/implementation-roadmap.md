@@ -9,9 +9,11 @@
 ```text
 Phase 1  协议冻结 + Headless 本机 MVP：Codex + Qwen
     ↓
-Phase 2  云端 Session、容器和 Session Handoff
+Phase 2  云端 Session、容器、Session Handoff 和持久编排
     ↓
-Phase 3  Web UI、多人协作和 Artifact 审阅
+Phase 2C  正式单用户产品 UI：Decision Desk 和项目空间
+    ↓
+Phase 3  Web UI 多人协作和 Artifact 审阅
     ↓
 Phase 4  模型扩展、外部系统和生产治理
     ↓
@@ -160,7 +162,22 @@ Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](c
 
 操作与完成证据见 [`docs/temporal-acceptance.md`](temporal-acceptance.md) 和 [`docs/phase-2b-review.md`](phase-2b-review.md)。Temporal 本机编排已落地；远程 Git/Snapshot 传输、生产对象存储与 Secret Broker、定时 cloud Session 和生产集群仍为后续切片，不能把 Phase 2B 等同于整个 Phase 2 完成。
 
-## 4. Phase 3：Web UI 与多人协作
+## 4. Phase 2C：正式单用户产品 UI
+
+正式产品 UI 与开发验收控制台分离。正式入口面向项目负责人，默认进入“我的决策”，围绕项目健康度、待决策事项、项目经理建议和交付物组织信息。开发验收控制台保留在 `#/acceptance`，用于验证凭证、Daemon、Session、Run 和原始事件链路。
+
+当前 V1 已实现：
+
+- Decision Desk 产品壳层和独立视觉语言。
+- “我的决策”首页，决策由真实 Artifact、Task、Session 和 Run 状态组合生成。
+- 项目空间，展示项目目标、健康度、工作阶段、待决策和交付物入口。
+- 决策详情，支持真实 Artifact 批准和阶段推进，并处理版本冲突。
+- 交付物和项目活动的项目负责人视图，隐藏 Prompt、凭证、Checkpoint 和完整 Tool 输出。
+- 响应式布局、键盘焦点、空状态、加载状态、错误恢复和 `prefers-reduced-motion`。
+
+详细设计见 [`docs/superpowers/specs/2026-11-26-formal-product-ui-design.md`](superpowers/specs/2026-11-26-formal-product-ui-design.md)，实施记录见 [`docs/formal-ui-acceptance.md`](formal-ui-acceptance.md)。
+
+## 5. Phase 3：Web UI 与多人协作
 
 ### 包含
 
@@ -177,7 +194,7 @@ Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](c
 
 真实成员可以查看运行、评审 Artifact、批准阶段、接管 Session，并通过项目经理获得统一交付摘要。
 
-## 5. Phase 4：模型和外部系统扩展
+## 6. Phase 4：模型和外部系统扩展
 
 ### 模型扩展
 
@@ -198,7 +215,7 @@ Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](c
 - 字段、状态、成员、关系映射。
 - Webhook、增量同步、冲突队列和幂等回写。
 
-## 6. Phase 5：高级自动化和规模化
+## 7. Phase 5：高级自动化和规模化
 
 - Agent Teams 和长期协作成员。
 - 完整 Cron Scheduler。
@@ -210,7 +227,7 @@ Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](c
 - 评估集、模型质量对比、成本优化和自动回归。
 - 企业 SSO、SCIM、审计导出和组织级策略治理。
 
-## 7. 第一阶段技术取舍
+## 8. 第一阶段技术取舍
 
 Phase 1 不做 UI 和云端运行时，但冻结后续扩展点：
 
