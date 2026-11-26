@@ -175,6 +175,8 @@ Phase 2A 的本地操作和验收方式见 [`docs/cloud-worker-acceptance.md`](c
 - 交付物和项目活动的项目负责人视图，隐藏 Prompt、凭证、Checkpoint 和完整 Tool 输出。
 - 响应式布局、键盘焦点、空状态、加载状态、错误恢复和 `prefers-reduced-motion`。
 
+已通过 Node.js 24.22.3 与真实 Chrome、PostgreSQL、独立控制面的创建项目、添加目标、读取正文、批准工件、推进阶段和交付物阅读流程；375px、768px、1024px、1440px 无页面横向溢出。项目经理实时对话、多人权限和协作仍未接入，不能将当前阶段摘要视为模型回复。
+
 详细设计见 [`docs/superpowers/specs/2026-11-26-formal-product-ui-design.md`](superpowers/specs/2026-11-26-formal-product-ui-design.md)，实施记录见 [`docs/formal-ui-acceptance.md`](formal-ui-acceptance.md)。
 
 ## 5. Phase 3：Web UI 与多人协作

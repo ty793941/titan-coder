@@ -5,7 +5,10 @@ import { buildDecisions } from "./decisions";
 import type { ProductDecision } from "./types";
 import { productErrorMessage } from "./errors";
 
-export type ProductDataClient = Pick<typeof api, "state" | "localStatus" | "artifacts">;
+export type ProductDataClient = Pick<
+  typeof api,
+  "state" | "localStatus" | "artifacts"
+>;
 
 export interface ProductDataSnapshot {
   state: ConsoleState;
@@ -30,7 +33,10 @@ export async function loadProductData(
   ]);
   if (signal?.aborted) throw abortError();
   if (stateResult.status === "rejected") {
-    if (stateResult.reason instanceof Error && stateResult.reason.name === "AbortError")
+    if (
+      stateResult.reason instanceof Error &&
+      stateResult.reason.name === "AbortError"
+    )
       throw stateResult.reason;
     throw stateResult.reason;
   }
@@ -46,7 +52,8 @@ export async function loadProductData(
   if (signal?.aborted) throw abortError();
   stateResult.value.tasks.forEach((task, index) => {
     const result = artifactResults[index]!;
-    if (result.status === "fulfilled") artifactsByTask.set(task.id, result.value);
+    if (result.status === "fulfilled")
+      artifactsByTask.set(task.id, result.value);
     else {
       artifactsByTask.set(task.id, []);
       errors.push(productErrorMessage(result.reason));
@@ -62,7 +69,13 @@ export async function loadProductData(
 }
 
 export function useProductData() {
-  const state = ref<ConsoleState>({ projects: [], tasks: [], sessions: [], runs: [], daemons: [] });
+  const state = ref<ConsoleState>({
+    projects: [],
+    tasks: [],
+    sessions: [],
+    runs: [],
+    daemons: [],
+  });
   const local = ref<LocalStatus | null>(null);
   const artifactsByTask = ref(new Map<string, Artifact[]>());
   const loading = ref(true);

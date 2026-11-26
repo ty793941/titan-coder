@@ -8,7 +8,8 @@ const messages: Record<string, string> = {
 };
 
 export function productErrorMessage(error: unknown) {
-  if (error instanceof ApiError) return messages[error.code] || "项目状态暂时无法更新，请稍后重试。";
+  if (error instanceof ApiError)
+    return messages[error.code] || "项目状态暂时无法更新，请稍后重试。";
   if (error instanceof Error && error.name === "AbortError") return "";
   return "项目状态暂时无法更新，请稍后重试。";
 }

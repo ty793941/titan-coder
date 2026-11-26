@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { buildDecisions } from "../src/product/decisions";
 import type { Artifact, Project, Run, Session, Task } from "../src/types";
 
-const project: Project = { id: "project-1", name: "支付平台", goal: "按期交付支付平台重构" };
+const project: Project = {
+  id: "project-1",
+  name: "支付平台",
+  goal: "按期交付支付平台重构",
+};
 const task: Task = {
   id: "task-1",
   projectId: project.id,
@@ -100,5 +104,38 @@ describe("项目负责人决策适配器", () => {
         runs: [],
       }),
     ).toEqual([]);
+  });
+
+  it("新尝试完成后不把历史失败重新列为待决策", () => {
+    const decisions = buildDecisions({
+      projects: [project],
+      tasks: [task],
+      artifactsByTask: new Map(),
+      sessions: [
+        {
+          id: "session-1",
+          taskId: task.id,
+          status: "completed",
+          createdAt: task.createdAt,
+        },
+      ],
+      runs: [
+        {
+          id: "run-old",
+          sessionId: "session-1",
+          attempt: 1,
+          status: "failed",
+          createdAt: "2026-11-26T10:00:00Z",
+        },
+        {
+          id: "run-new",
+          sessionId: "session-1",
+          attempt: 2,
+          status: "completed",
+          createdAt: "2026-11-26T11:00:00Z",
+        },
+      ],
+    });
+    expect(decisions).toEqual([]);
   });
 });

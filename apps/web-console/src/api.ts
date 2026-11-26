@@ -66,9 +66,7 @@ export function createConsoleApi(base = "") {
           : `HTTP_${response.status}`;
       const message = sensitive
         ? "凭证保存失败，请检查本机密钥链权限后重试。"
-        : typeof error.message === "string"
-          ? error.message
-          : `请求失败（HTTP ${response.status}），请检查本机服务。`;
+        : safeErrorMessage(code);
       throw new ApiError(response.status, code, message);
     }
     if (body === null)
@@ -200,7 +198,10 @@ export function createConsoleApi(base = "") {
       ),
     saveProviderUrl: (provider: Provider, url: string, csrfToken: string) =>
       localPost<{ configured: boolean; credentialRef: string }>(
-        "/provider-url", { provider, url }, csrfToken, true,
+        "/provider-url",
+        { provider, url },
+        csrfToken,
+        true,
       ),
     daemon: (action: "start" | "stop", csrfToken: string) =>
       localPost<{ running: boolean; daemonId?: string }>(
@@ -293,6 +294,20 @@ export function createConsoleApi(base = "") {
   };
 }
 export const api = createConsoleApi();
+const publicErrorMessages: Record<string, string> = {
+  VERSION_CONFLICT: "内容已更新，请重新审阅最新版本。",
+  INVALID_STATE_TRANSITION: "当前阶段不能执行此操作，请刷新后检查前置条件。",
+  PERMISSION_DENIED: "当前操作未获授权，请检查项目权限和执行环境。",
+  UNAUTHORIZED: "当前连接尚未获得授权，请重新连接服务。",
+  DAEMON_UNAVAILABLE: "执行环境暂时不可用，请检查设备状态后重试。",
+  NETWORK_UNAVAILABLE: "无法连接项目服务，请确认服务在线后重试。",
+};
+function safeErrorMessage(code: string) {
+  return (
+    publicErrorMessages[code] || "操作暂时无法完成，请刷新项目状态后重试。"
+  );
+}
 export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "操作失败，请刷新后重试。";
+  if (error instanceof ApiError) return safeErrorMessage(error.code);
+  return "操作失败，请刷新后重试。";
 }

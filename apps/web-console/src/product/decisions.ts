@@ -1,5 +1,11 @@
 import type { Artifact, Project, Run, Session, Task } from "../types";
-import { approvedChain, latestArtifact, stageLabel, stages, statusLabel } from "../workflow";
+import {
+  approvedChain,
+  latestArtifact,
+  stageLabel,
+  stages,
+  statusLabel,
+} from "../workflow";
 import type { DecisionInput, DecisionPriority, ProductDecision } from "./types";
 
 const priorityRank: Record<DecisionPriority, number> = {
@@ -10,14 +16,20 @@ const priorityRank: Record<DecisionPriority, number> = {
 };
 
 function projectName(projects: Project[], projectId: string) {
-  return projects.find((project) => project.id === projectId)?.name || "未命名项目";
+  return (
+    projects.find((project) => project.id === projectId)?.name || "未命名项目"
+  );
 }
 
 function taskPriority(task: Task): DecisionPriority {
   return task.priority;
 }
 
-function reviewDecision(projects: Project[], task: Task, artifact: Artifact): ProductDecision {
+function reviewDecision(
+  projects: Project[],
+  task: Task,
+  artifact: Artifact,
+): ProductDecision {
   const label = stageLabel(artifact.type);
   return {
     id: `review_artifact:${artifact.artifactId}`,
@@ -29,9 +41,11 @@ function reviewDecision(projects: Project[], task: Task, artifact: Artifact): Pr
     summary: `${projectName(projects, task.projectId)}中的“${task.title}”有一个新版本等待你的判断。`,
     whyNow: `版本 ${artifact.version} 已生成，后续阶段必须等你确认。`,
     recommendation: `请先阅读${label}的内容和来源，再决定是否批准。`,
-    impact: "批准后可以继续推进项目阶段；要求修改会让项目经理重新整理这一阶段。",
+    impact:
+      "批准后可以继续推进项目阶段；要求修改会让项目经理重新整理这一阶段。",
     actionLabel: `批准${label}`,
     artifactId: artifact.artifactId,
+    artifactChecksum: artifact.checksum,
     createdAt: artifact.createdAt || task.createdAt,
   };
 }
@@ -42,7 +56,8 @@ function executionDecision(
   run: Run,
 ): ProductDecision {
   const status = statusLabel(run.status);
-  const priority: DecisionPriority = run.status === "failed" ? "critical" : "high";
+  const priority: DecisionPriority =
+    run.status === "failed" ? "critical" : "high";
   const summary =
     run.status === "failed"
       ? `“${task.title}”的执行失败，需要你决定是否查看原因或重新安排。`
@@ -64,10 +79,19 @@ function executionDecision(
   };
 }
 
-function advanceDecision(projects: Project[], task: Task, artifacts: Artifact[]): ProductDecision | undefined {
+function advanceDecision(
+  projects: Project[],
+  task: Task,
+  artifacts: Artifact[],
+): ProductDecision | undefined {
   const current = latestArtifact(artifacts, task.stage);
-  if (!current || task.stage === "implement" || task.stage === "delivered") return undefined;
-  if (current.reviewState !== "approved" || !approvedChain(artifacts, task.stage)) return undefined;
+  if (!current || task.stage === "implement" || task.stage === "delivered")
+    return undefined;
+  if (
+    current.reviewState !== "approved" ||
+    !approvedChain(artifacts, task.stage)
+  )
+    return undefined;
   const currentIndex = stages.findIndex((stage) => stage.id === task.stage);
   const nextStage = stages[currentIndex + 1]?.id;
   if (!nextStage) return undefined;
@@ -101,9 +125,22 @@ export function buildDecisions(input: DecisionInput): ProductDecision[] {
     const advance = advanceDecision(input.projects, task, artifacts);
     if (advance) decisions.push(advance);
   }
-  const sessionById = new Map(input.sessions.map((session) => [session.id, session]));
+  const sessionById = new Map(
+    input.sessions.map((session) => [session.id, session]),
+  );
+  const latestRuns = new Map<string, Run>();
   for (const run of input.runs) {
-    if (!["waiting_input", "reconnecting", "failed"].includes(run.status)) continue;
+    const previous = latestRuns.get(run.sessionId);
+    if (
+      !previous ||
+      run.attempt > previous.attempt ||
+      (run.attempt === previous.attempt && run.createdAt > previous.createdAt)
+    )
+      latestRuns.set(run.sessionId, run);
+  }
+  for (const run of latestRuns.values()) {
+    if (!["waiting_input", "reconnecting", "failed"].includes(run.status))
+      continue;
     const task = taskById.get(sessionById.get(run.sessionId)?.taskId || "");
     if (task) decisions.push(executionDecision(input.projects, task, run));
   }

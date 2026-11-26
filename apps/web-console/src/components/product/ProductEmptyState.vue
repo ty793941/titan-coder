@@ -12,7 +12,11 @@ const emit = defineEmits<{ action: [] }>();
     <span class="product-empty-mark" aria-hidden="true" />
     <h2>{{ title }}</h2>
     <p>{{ description }}</p>
-    <button v-if="actionLabel" class="product-secondary-action" @click="emit('action')">
+    <button
+      v-if="actionLabel"
+      class="product-secondary-action"
+      @click="emit('action')"
+    >
       {{ actionLabel }}
     </button>
   </section>

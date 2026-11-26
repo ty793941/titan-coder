@@ -1,7 +1,7 @@
 import { createServer, type RequestListener, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConsoleApi, ApiError } from "../src/api";
+import { createConsoleApi, ApiError, errorMessage } from "../src/api";
 
 let server: Server | undefined;
 async function serve(handler: RequestListener) {
@@ -18,6 +18,31 @@ afterEach(async () => {
 });
 
 describe("console HTTP boundary", () => {
+  it("does not expose server error bodies through shared execution and settings APIs", async () => {
+    const base = await serve((_req, res) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "/private/secret-example failed",
+          },
+        }),
+      );
+    });
+    let failure: unknown;
+    try {
+      await createConsoleApi(base).controlRun("run-1", "cancel");
+    } catch (caught) {
+      failure = caught;
+    }
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(String(failure)).not.toContain("secret-example");
+    expect(errorMessage(failure)).not.toContain("/private/");
+    expect(errorMessage(new Error("secret-example"))).not.toContain(
+      "secret-example",
+    );
+  });
   it("surfaces a stale task version as a refreshable conflict instead of reporting success", async () => {
     const base = await serve((_req, res) => {
       res.writeHead(409, { "Content-Type": "application/json" });

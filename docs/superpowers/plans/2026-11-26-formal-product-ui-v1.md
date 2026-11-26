@@ -1,14 +1,28 @@
 # Titan 正式产品 UI V1 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 执行方式：按任务逐项实现、测试和评审；本轮使用独立工作树串行实现及只读评审。
 
-**Goal:** 将当前开发验收控制台与正式产品入口分离，交付面向项目负责人的 Decision Desk：默认进入“我的决策”，并能进入项目空间、审阅真实工件和完成真实审批。
+**目标：** 将当前开发验收控制台与正式产品入口分离，交付面向项目负责人的 Decision Desk：默认进入“我的决策”，并能进入项目空间、审阅真实工件和完成真实审批。
 
-**Architecture:** 保留现有验收控制台作为 `#/acceptance` 开发入口，把根路径切换为正式产品壳层。正式 UI 只在前端组合 Project、Task、Artifact、Session、Run 和事件事实，使用适配器生成决策队列；决策详情通过既有审批和阶段推进 API 完成真实操作，不新增重复领域事实。执行详情复用现有 API 和组件能力，但从正式产品的项目页面进入。
+**架构：** 保留现有验收控制台作为 `#/acceptance` 开发入口，把根路径切换为正式产品壳层。正式 UI 只在前端组合 Project、Task、Artifact、Session、Run 和事件事实，使用适配器生成决策队列；决策详情通过既有审批和阶段推进 API 完成真实操作，不新增重复领域事实。执行详情复用现有 API 和组件能力，但从正式产品的项目页面进入。
 
-**Tech Stack:** Vue 3、TypeScript、Vite、Vitest、Vue Test Utils、Lucide Vue、现有 Control Plane API。
+**技术栈：** Vue 3、TypeScript、Vite、Vitest、Vue Test Utils、Lucide Vue、现有 Control Plane API。
 
 ---
+
+## 实施记录（2026-11-26）
+
+- [x] 分离正式产品入口和开发验收入口，根路径进入“我的决策”。
+- [x] 实现决策适配、跨项目数据加载、错误脱敏和局部同步警告。
+- [x] 实现正式壳层、项目目录、项目空间、工作目标创建和阶段资料入口。
+- [x] 实现正文读取与校验、真实批准、版本化阶段推进和批准后导航。
+- [x] 实现独立执行、环境设置、交付物按需正文读取和项目活动页面。
+- [x] 53 项前端测试通过；全仓无缓存构建、类型和静态检查共 33 项任务通过；OpenAPI 一致性通过。
+- [x] 真实 Chrome、Control Plane、PostgreSQL 的项目创建到交付物阅读全流程通过，覆盖 375、768、1024、1440 四种屏宽，无页面脚本错误；最终只读评审为 `approve`。
+
+实际测试统一位于 `apps/web-console/test/product-*.test.ts`，遵循项目现有 Vitest include 规则；没有按早期草案把测试放在 `src/product/`。实际新增 `DocumentReader.vue` 和 `GoalDialog.vue`，前者负责正文校验，后者负责项目/目标创建。正式执行详情位于 `#/executions/:runId`，新执行入口位于 `#/tasks/:taskId/execution`，不再把正式产品操作导航到验收控制台。项目经理当前为状态摘要和新目标入口，实时模型对话仍待后续后端接入。
+
+下文保留实施时的分步设计，最终验收事实以 `docs/formal-ui-acceptance.md` 为准。
 
 ## 文件结构与职责
 

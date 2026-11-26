@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { mount } from "@vue/test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProductShell from "../src/components/product/ProductShell.vue";
 import DecisionInbox from "../src/components/product/DecisionInbox.vue";
 import DecisionDetail from "../src/components/product/DecisionDetail.vue";
 import ProjectSpace from "../src/components/product/ProjectSpace.vue";
 import ActivityView from "../src/components/product/ActivityView.vue";
+import DeliveryView from "../src/components/product/DeliveryView.vue";
 import { api, ApiError } from "../src/api";
 import type { ProductDecision } from "../src/product/types";
 
@@ -22,10 +23,56 @@ const decision: ProductDecision = {
   impact: "批准后可继续推进。",
   actionLabel: "批准问题确认",
   artifactId: "questions-1",
+  artifactChecksum: "sha256:questions",
   createdAt: "2026-11-26T10:00:00Z",
 };
 
 describe("正式产品首页", () => {
+  it("只在展开交付物后读取目标正文", async () => {
+    const read = vi.spyOn(api, "content");
+    const wrapper = mount(DeliveryView, {
+      props: {
+        projects: [],
+        artifacts: [
+          {
+            artifactId: "first",
+            type: "questions",
+            version: 1,
+            checksum: "sha256:questions",
+            reviewState: "pending",
+            sourceArtifacts: [],
+            uri: "artifact://first",
+          },
+          {
+            artifactId: "second",
+            type: "research",
+            version: 1,
+            checksum: "sha256:questions",
+            reviewState: "pending",
+            sourceArtifacts: [],
+            uri: "artifact://second",
+          },
+        ],
+      },
+    });
+    await flushPromises();
+    expect(read).not.toHaveBeenCalled();
+    const details = wrapper.get('details[data-artifact-id="first"]');
+    details.element.setAttribute("open", "");
+    await details.trigger("toggle");
+    await flushPromises();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith("first", expect.any(AbortSignal));
+    wrapper.unmount();
+  });
+  beforeEach(() => {
+    vi.spyOn(api, "content").mockResolvedValue({
+      content: "# 结算范围\n本次交付支付与退款接口。",
+      format: "markdown",
+      checksum: "sha256:questions",
+      bytes: 64,
+    });
+  });
   it("显示面向项目负责人的导航和决策入口", () => {
     const wrapper = mount(ProductShell, {
       props: {
@@ -81,6 +128,8 @@ describe("正式产品首页", () => {
     const wrapper = mount(DecisionDetail, {
       props: { decision, onRefresh: vi.fn() },
     });
+    await flushPromises();
+    expect(wrapper.text()).toContain("本次交付支付与退款接口");
     await wrapper.get(".product-primary-action").trigger("click");
     expect(approve).toHaveBeenCalledWith("questions-1");
     expect(wrapper.text()).toContain("已完成");
@@ -94,6 +143,7 @@ describe("正式产品首页", () => {
     const wrapper = mount(DecisionDetail, {
       props: { decision, onRefresh: vi.fn() },
     });
+    await flushPromises();
     await wrapper.get(".product-primary-action").trigger("click");
     expect(wrapper.text()).toContain("内容已更新，请重新审阅");
     expect(wrapper.text()).not.toContain("raw response body");
@@ -107,6 +157,7 @@ describe("正式产品首页", () => {
     const wrapper = mount(DecisionDetail, {
       props: { decision, onRefresh: vi.fn() },
     });
+    await flushPromises();
     await wrapper.get(".product-primary-action").trigger("click");
     expect(wrapper.text()).toContain("项目状态暂时无法更新，请稍后重试");
     expect(wrapper.text()).not.toContain("/secret/workspace");
@@ -128,12 +179,58 @@ describe("正式产品首页", () => {
     expect(wrapper.text()).toContain("待决策");
   });
 
+  it("正文校验不一致时阻止批准", async () => {
+    vi.spyOn(api, "content").mockResolvedValue({
+      content: "不同内容",
+      format: "text",
+      checksum: "sha256:other",
+      bytes: 12,
+    });
+    const approve = vi.spyOn(api, "approveArtifact");
+    const wrapper = mount(DecisionDetail, { props: { decision } });
+    await flushPromises();
+    expect(
+      wrapper.get(".product-primary-action").attributes("disabled"),
+    ).toBeDefined();
+    expect(wrapper.text()).toContain("版本校验不一致");
+    expect(approve).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("通过 Session 关联活动和真实任务", () => {
     const wrapper = mount(ActivityView, {
       props: {
-        tasks: [{ id: "task-1", projectId: "project-1", title: "结算接口", goal: "交付接口", stage: "implement", status: "active", version: 1, acceptanceCriteria: [], priority: "medium", createdAt: "2026-11-26T10:00:00Z" }],
-        sessions: [{ id: "session-1", taskId: "task-1", status: "running", createdAt: "2026-11-26T10:00:00Z" }],
-        runs: [{ id: "run-1", sessionId: "session-1", attempt: 1, status: "running", createdAt: "2026-11-26T10:01:00Z" }],
+        tasks: [
+          {
+            id: "task-1",
+            projectId: "project-1",
+            title: "结算接口",
+            goal: "交付接口",
+            stage: "implement",
+            status: "active",
+            version: 1,
+            acceptanceCriteria: [],
+            priority: "medium",
+            createdAt: "2026-11-26T10:00:00Z",
+          },
+        ],
+        sessions: [
+          {
+            id: "session-1",
+            taskId: "task-1",
+            status: "running",
+            createdAt: "2026-11-26T10:00:00Z",
+          },
+        ],
+        runs: [
+          {
+            id: "run-1",
+            sessionId: "session-1",
+            attempt: 1,
+            status: "running",
+            createdAt: "2026-11-26T10:01:00Z",
+          },
+        ],
       },
     });
     expect(wrapper.text()).toContain("结算接口");

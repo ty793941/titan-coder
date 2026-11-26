@@ -4,9 +4,9 @@ Titan Coder 是一个面向产品和研发交付的 Agent 工作台。第一阶�
 
 ## 当前阶段
 
-Phase 1 已提供本机 Daemon 自动认领 Run、独立 Node Worker、持久进度 Outbox、Checkpoint 恢复、QRSPI 审批门禁和实时 SSE。Codex 使用 App Server stdio 原生协议，Qwen 使用官方兼容 API；真实模型推理尚待配置凭证后验收。根据人工验收需求，另提供本机 Vue 工作台；云端 Session、多人协作、外部系统与其他 Provider 留到后续阶段。
+已提供本机执行、Docker Cloud Worker、Session Handoff 和 Temporal 持久编排。正式 Web 产品面向项目负责人，默认进入决策收件箱，支持项目空间、工作目标、阶段审批、交付物阅读和运行详情；开发验收控制台保留独立入口。Codex 继续通过 App Server 原生协议运行。多人协作和生产级云调度属于后续阶段。
 
-## 浏览器人工验收
+## 使用项目工作台
 
 ```bash
 pnpm install
@@ -14,7 +14,7 @@ docker compose -f infra/docker-compose.yml up -d --wait postgres
 pnpm ui
 ```
 
-打开 `http://127.0.0.1:5173`。在“环境与 Key”添加 Qwen 与 OpenAI 官方 Key，保存到 macOS 钥匙串，再启动本机 Daemon。项目、任务、工件批准、Run 与事件均可在界面操作；模型只在你显式启动运行后调用。详见 [UI 验收与 Key 配置](docs/ui-acceptance.md)。
+打开 `http://127.0.0.1:5173/#/` 进入“我的决策”。先创建项目和工作目标，再审阅阶段资料并批准推进。在“环境设置”配置模型服务和本机执行环境；模型仅在显式启动运行后调用。开发验收入口为 `http://127.0.0.1:5173/#/acceptance`。详见 [正式 UI 操作与验收](docs/formal-ui-acceptance.md) 和 [凭证配置](docs/ui-acceptance.md)。
 
 ## 本地开发
 

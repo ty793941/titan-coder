@@ -19,6 +19,7 @@ export interface ProductDecision {
   impact: string;
   actionLabel: string;
   artifactId?: string;
+  artifactChecksum?: string;
   runId?: string;
   createdAt: string;
   nextStage?: Stage;

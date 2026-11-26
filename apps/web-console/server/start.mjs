@@ -48,7 +48,7 @@ process.once('SIGTERM', () => { void stop(); });
 gateway.server.once('error', async () => { process.stderr.write('UI_START_FAILED: 请检查本机端口是否已被占用。\n'); process.exitCode = 1; await stop(); });
 try {
   await waitForControlPlane(controlPlane, controlPlaneUrl, consoleToken);
-  if (!cpExited && !stopping) gateway.server.listen(port, '127.0.0.1', () => { process.stdout.write(`Titan 本机验收界面：http://127.0.0.1:${port}\n控制面：${controlPlaneUrl}；Key 仅保存在本机钥匙串。\n`); });
+  if (!cpExited && !stopping) gateway.server.listen(port, '127.0.0.1', () => { process.stdout.write(`Titan 项目工作台：http://127.0.0.1:${port}/#/\n开发验收入口：http://127.0.0.1:${port}/#/acceptance\n控制面：${controlPlaneUrl}；Key 仅保存在本机钥匙串。\n`); });
 } catch {
   process.stderr.write('CONTROL_PLANE_START_FAILED: 控制面未就绪，请确认 PostgreSQL 已启动，并先执行 pnpm build。\n');
   process.exitCode = 1;

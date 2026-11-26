@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadProductData } from "../src/product/useProductData";
-import type { Artifact, ConsoleState, LocalStatus, Project, Task } from "../src/types";
+import type {
+  Artifact,
+  ConsoleState,
+  LocalStatus,
+  Project,
+  Task,
+} from "../src/types";
 
-const project: Project = { id: "project-1", name: "支付平台", goal: "交付支付平台重构" };
+const project: Project = {
+  id: "project-1",
+  name: "支付平台",
+  goal: "交付支付平台重构",
+};
 const tasks: Task[] = [
   {
     id: "task-1",
@@ -60,9 +70,11 @@ describe("正式产品数据加载", () => {
     const client = {
       state: vi.fn().mockResolvedValue(state),
       localStatus: vi.fn().mockResolvedValue(local),
-      artifacts: vi.fn().mockImplementation(async (taskId: string) =>
-        taskId === "task-1" ? [artifact] : [],
-      ),
+      artifacts: vi
+        .fn()
+        .mockImplementation(async (taskId: string) =>
+          taskId === "task-1" ? [artifact] : [],
+        ),
     };
 
     const snapshot = await loadProductData(client);
@@ -96,12 +108,16 @@ describe("正式产品数据加载", () => {
     const controller = new AbortController();
     controller.abort();
     const client = {
-      state: vi.fn().mockRejectedValue(new DOMException("Aborted", "AbortError")),
+      state: vi
+        .fn()
+        .mockRejectedValue(new DOMException("Aborted", "AbortError")),
       localStatus: vi.fn(),
       artifacts: vi.fn(),
     };
 
-    await expect(loadProductData(client, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      loadProductData(client, controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
     expect(client.artifacts).not.toHaveBeenCalled();
   });
 });

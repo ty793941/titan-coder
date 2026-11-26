@@ -14,7 +14,7 @@ docker compose -f infra/docker-compose.yml up -d --wait postgres
 pnpm ui
 ```
 
-浏览器打开 `http://127.0.0.1:5173`。启动器先构建模块，再启动独立控制面 `127.0.0.1:3301` 和验收网关。默认数据库为开发 Compose 的 `postgresql://titan:titan@127.0.0.1:55432/titan`，可用 `DATABASE_URL` 覆盖。
+浏览器打开 `http://127.0.0.1:5173/#/acceptance` 进入开发验收控制台；根路径是面向项目负责人的正式产品。启动器先构建模块，再启动独立控制面 `127.0.0.1:3301` 和本机网关。默认数据库为开发 Compose 的 `postgresql://titan:titan@127.0.0.1:55432/titan`，可用 `DATABASE_URL` 覆盖。
 
 已运行的 3000 端口 Headless 服务可以保留，UI 不会接管或终止它。3301 或 5173 已被占用时启动失败，不会向旧服务静默转发。可通过 `TITAN_CONTROL_PLANE_PORT` 和 `TITAN_UI_PORT` 更换端口。Ctrl-C 停止 UI 时会停止由它创建的控制面与 Daemon，保留数据库、设备状态和产物。
 
