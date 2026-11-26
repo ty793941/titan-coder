@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
+import { ArrowRight } from "lucide-vue-next";
 import AcceptanceConsole from "./components/AcceptanceConsole.vue";
 import DecisionInbox from "./components/product/DecisionInbox.vue";
 import DecisionDetail from "./components/product/DecisionDetail.vue";
@@ -20,6 +21,9 @@ function updateRoute() {
 
 function navigate(next: ProductRoute) {
   window.location.hash = productRoute(next);
+}
+function openExecution(runId: string) {
+  navigate({ name: "acceptance", runId });
 }
 
 const allArtifacts = () =>
@@ -54,7 +58,7 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
 </script>
 
 <template>
-  <AcceptanceConsole v-if="route.name === 'acceptance'" />
+  <AcceptanceConsole v-if="route.name === 'acceptance'" :initial-run-id="route.runId" />
   <ProductShell
     v-else
     :route="route"
@@ -62,6 +66,7 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
     :projects="product.projects.value"
     :loading="product.loading.value"
     :error="product.error.value"
+    :partial-errors="product.partialErrors.value"
     :last-sync="product.lastSync.value"
     @navigate="navigate"
     @refresh="product.refresh"
@@ -74,6 +79,10 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
       @decision="(id) => navigate({ name: 'decision', decisionId: id })"
       @project="(id) => navigate({ name: 'project', projectId: id })"
     />
+    <main v-else-if="route.name === 'projects'" class="product-page product-list-page">
+      <header class="product-page-heading"><div><span class="product-kicker">PROJECTS / YOUR PORTFOLIO</span><h1>项目<span class="product-period">。</span></h1><p>从目标、风险和交付状态进入每个项目空间。</p></div></header>
+      <section class="product-project-directory"><button v-for="project in product.projects.value" :key="project.id" class="product-directory-item" @click="navigate({ name: 'project', projectId: project.id })"><span><strong>{{ project.name }}</strong><small>{{ project.goal }}</small></span><span class="product-directory-state">查看项目 <ArrowRight :size="14" /></span></button><p v-if="!product.projects.value.length" class="product-project-empty">还没有项目。请从项目经理开始定义第一个目标。</p></section>
+    </main>
     <DecisionDetail
       v-else-if="route.name === 'decision' && selectedDecision()"
       :decision="selectedDecision()!"
@@ -81,6 +90,7 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
       @back="navigate({ name: 'inbox' })"
       @project="(id) => navigate({ name: 'project', projectId: id })"
       @completed="product.refresh"
+      @execution="openExecution"
     />
     <ProjectSpace
       v-else-if="route.name === 'project' && selectedProject()"
@@ -102,6 +112,7 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
     <ActivityView
       v-else-if="route.name === 'activity'"
       :runs="product.state.value.runs"
+      :sessions="product.state.value.sessions"
       :tasks="product.state.value.tasks"
       @back="navigate({ name: 'inbox' })"
     />

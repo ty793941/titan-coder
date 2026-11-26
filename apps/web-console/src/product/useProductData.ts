@@ -1,8 +1,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { api, errorMessage } from "../api";
+import { api } from "../api";
 import type { Artifact, ConsoleState, LocalStatus } from "../types";
 import { buildDecisions } from "./decisions";
 import type { ProductDecision } from "./types";
+import { productErrorMessage } from "./errors";
 
 export type ProductDataClient = Pick<typeof api, "state" | "localStatus" | "artifacts">;
 
@@ -37,7 +38,7 @@ export async function loadProductData(
   const local =
     localResult.status === "fulfilled"
       ? localResult.value
-      : (errors.push(errorMessage(localResult.reason)), null);
+      : (errors.push(productErrorMessage(localResult.reason)), null);
   const artifactsByTask = new Map<string, Artifact[]>();
   const artifactResults = await Promise.allSettled(
     stateResult.value.tasks.map((task) => client.artifacts(task.id, signal)),
@@ -48,7 +49,7 @@ export async function loadProductData(
     if (result.status === "fulfilled") artifactsByTask.set(task.id, result.value);
     else {
       artifactsByTask.set(task.id, []);
-      errors.push(errorMessage(result.reason));
+      errors.push(productErrorMessage(result.reason));
     }
   });
   return {
@@ -99,7 +100,7 @@ export function useProductData() {
       partialErrors.value = snapshot.errors;
       lastSync.value = snapshot.lastSync;
     } catch (caught) {
-      if (!active.signal.aborted) error.value = errorMessage(caught);
+      if (!active.signal.aborted) error.value = productErrorMessage(caught);
     } finally {
       if (!active.signal.aborted) {
         loading.value = false;

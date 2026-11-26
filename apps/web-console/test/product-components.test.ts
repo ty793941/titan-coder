@@ -5,6 +5,7 @@ import ProductShell from "../src/components/product/ProductShell.vue";
 import DecisionInbox from "../src/components/product/DecisionInbox.vue";
 import DecisionDetail from "../src/components/product/DecisionDetail.vue";
 import ProjectSpace from "../src/components/product/ProjectSpace.vue";
+import ActivityView from "../src/components/product/ActivityView.vue";
 import { api, ApiError } from "../src/api";
 import type { ProductDecision } from "../src/product/types";
 
@@ -33,6 +34,7 @@ describe("正式产品首页", () => {
         projects: [{ id: "project-1", name: "支付平台", goal: "交付重构" }],
         loading: false,
         error: "",
+        partialErrors: [],
         lastSync: "2026-11-26T10:00:00Z",
       },
       slots: { default: "首页内容" },
@@ -111,5 +113,17 @@ describe("正式产品首页", () => {
     expect(wrapper.text()).toContain("支付平台");
     expect(wrapper.text()).toContain("项目目标");
     expect(wrapper.text()).toContain("待决策");
+  });
+
+  it("通过 Session 关联活动和真实任务", () => {
+    const wrapper = mount(ActivityView, {
+      props: {
+        tasks: [{ id: "task-1", projectId: "project-1", title: "结算接口", goal: "交付接口", stage: "implement", status: "active", version: 1, acceptanceCriteria: [], priority: "medium", createdAt: "2026-11-26T10:00:00Z" }],
+        sessions: [{ id: "session-1", taskId: "task-1", status: "running", createdAt: "2026-11-26T10:00:00Z" }],
+        runs: [{ id: "run-1", sessionId: "session-1", attempt: 1, status: "running", createdAt: "2026-11-26T10:01:00Z" }],
+      },
+    });
+    expect(wrapper.text()).toContain("结算接口");
+    expect(wrapper.text()).not.toContain("项目执行");
   });
 });

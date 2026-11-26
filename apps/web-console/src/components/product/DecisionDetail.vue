@@ -8,7 +8,7 @@ const props = defineProps<{
   decision: ProductDecision;
   onRefresh?: () => void | Promise<void>;
 }>();
-const emit = defineEmits<{ back: []; project: [id: string]; completed: [] }>();
+const emit = defineEmits<{ back: []; project: [id: string]; completed: []; execution: [runId: string] }>();
 const busy = ref(false);
 const success = ref(false);
 const error = ref("");
@@ -18,6 +18,10 @@ async function act() {
   busy.value = true;
   error.value = "";
   try {
+    if (props.decision.type === "execution_attention" && props.decision.runId) {
+      emit("execution", props.decision.runId);
+      return;
+    }
     if (props.decision.type === "review_artifact" && props.decision.artifactId) {
       await api.approveArtifact(props.decision.artifactId);
     } else if (
@@ -48,7 +52,7 @@ async function act() {
 </script>
 
 <template>
-  <main class="product-page product-decision-detail">
+    <main class="product-page product-decision-detail">
     <button class="product-back-link" @click="emit('back')"><ArrowLeft :size="15" />返回我的决策</button>
     <header class="product-detail-heading">
       <div><span class="product-kicker">DECISION / {{ decision.priority.toUpperCase() }}</span><h1>{{ decision.title }}<span class="product-period">。</span></h1><p>{{ decision.summary }}</p></div>

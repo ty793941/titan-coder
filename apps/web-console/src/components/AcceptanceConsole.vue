@@ -30,6 +30,7 @@ import ArtifactExplorer from "./ArtifactExplorer.vue";
 import EnvironmentPanel from "./EnvironmentPanel.vue";
 import EmptyState from "./EmptyState.vue";
 import CreateDialog from "./CreateDialog.vue";
+const props = defineProps<{ initialRunId?: string }>();
 const {
   state,
   local,
@@ -449,6 +450,7 @@ onBeforeUnmount(() => clearTimeout(notificationTimer));
                   :artifacts="artifacts"
                   :state="state"
                   :local="local"
+                  :initial-run-id="props.initialRunId"
                   @refresh="refresh"
                   @notify="notify"
                   @environment="navigate('environment')"

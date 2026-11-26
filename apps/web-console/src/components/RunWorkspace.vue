@@ -30,6 +30,7 @@ const props = defineProps<{
   artifacts: Artifact[];
   state: ConsoleState;
   local: LocalStatus | null;
+  initialRunId?: string;
 }>();
 const emit = defineEmits<{
   refresh: [];
@@ -159,6 +160,13 @@ watch(
   (values) => {
     if (!values.some((item) => item.id === selectedRunId.value))
       selectedRunId.value = values[0]?.id || "";
+  },
+  { immediate: true },
+);
+watch(
+  () => props.initialRunId,
+  (value) => {
+    if (value && runs.value.some((run) => run.id === value)) selectedRunId.value = value;
   },
   { immediate: true },
 );

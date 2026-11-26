@@ -86,7 +86,10 @@ describe("正式产品数据加载", () => {
     const snapshot = await loadProductData(client);
     expect(snapshot.artifactsByTask.get("task-1")).toEqual([artifact]);
     expect(snapshot.artifactsByTask.get("task-2")).toEqual([]);
-    expect(snapshot.errors).toEqual(["local unavailable", "artifact unavailable"]);
+    expect(snapshot.errors).toEqual([
+      "项目状态暂时无法更新，请稍后重试。",
+      "项目状态暂时无法更新，请稍后重试。",
+    ]);
   });
 
   it("被取消后不继续请求任务工件", async () => {
