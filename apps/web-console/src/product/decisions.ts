@@ -1,5 +1,5 @@
 import type { Artifact, Project, Run, Session, Task } from "../types";
-import { approvedChain, latestArtifact, stageLabel, statusLabel } from "../workflow";
+import { approvedChain, latestArtifact, stageLabel, stages, statusLabel } from "../workflow";
 import type { DecisionInput, DecisionPriority, ProductDecision } from "./types";
 
 const priorityRank: Record<DecisionPriority, number> = {
@@ -68,7 +68,10 @@ function advanceDecision(projects: Project[], task: Task, artifacts: Artifact[])
   const current = latestArtifact(artifacts, task.stage);
   if (!current || task.stage === "implement" || task.stage === "delivered") return undefined;
   if (current.reviewState !== "approved" || !approvedChain(artifacts, task.stage)) return undefined;
-  const next = task.stage === "plan" ? "开发执行" : "下一阶段";
+  const currentIndex = stages.findIndex((stage) => stage.id === task.stage);
+  const nextStage = stages[currentIndex + 1]?.id;
+  if (!nextStage) return undefined;
+  const next = stageLabel(nextStage);
   return {
     id: `advance_stage:${task.id}:${task.version}`,
     type: "advance_stage",
@@ -81,6 +84,8 @@ function advanceDecision(projects: Project[], task: Task, artifacts: Artifact[])
     recommendation: "确认当前证据和验收标准后推进阶段。",
     impact: "推进会更新任务版本，并使下一阶段成为项目经理的工作入口。",
     actionLabel: `推进至${next}`,
+    nextStage,
+    expectedVersion: task.version,
     createdAt: current.createdAt || task.createdAt,
   };
 }

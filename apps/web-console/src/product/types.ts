@@ -1,4 +1,4 @@
-import type { Artifact, Project, Run, Session, Task } from "../types";
+import type { Artifact, Project, Run, Session, Stage, Task } from "../types";
 
 export type DecisionType =
   | "review_artifact"
@@ -21,6 +21,8 @@ export interface ProductDecision {
   artifactId?: string;
   runId?: string;
   createdAt: string;
+  nextStage?: Stage;
+  expectedVersion?: number;
 }
 
 export interface DecisionInput {

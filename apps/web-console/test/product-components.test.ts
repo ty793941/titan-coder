@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ProductShell from "../src/components/product/ProductShell.vue";
 import DecisionInbox from "../src/components/product/DecisionInbox.vue";
+import DecisionDetail from "../src/components/product/DecisionDetail.vue";
+import ProjectSpace from "../src/components/product/ProjectSpace.vue";
+import { api, ApiError } from "../src/api";
 import type { ProductDecision } from "../src/product/types";
 
 const decision: ProductDecision = {
@@ -61,5 +64,52 @@ describe("正式产品首页", () => {
       props: { decisions: [], projects: [], loading: false },
     });
     expect(wrapper.text()).toContain("当前没有需要你决定的事项");
+  });
+
+  it("批准工件决策时调用真实审批接口", async () => {
+    const approve = vi.spyOn(api, "approveArtifact").mockResolvedValue({
+      artifactId: "questions-1",
+      type: "questions",
+      version: 1,
+      checksum: "sha256:questions",
+      reviewState: "approved",
+      sourceArtifacts: [],
+      uri: "artifact://questions-1",
+    });
+    const wrapper = mount(DecisionDetail, {
+      props: { decision, onRefresh: vi.fn() },
+    });
+    await wrapper.get(".product-primary-action").trigger("click");
+    expect(approve).toHaveBeenCalledWith("questions-1");
+    expect(wrapper.text()).toContain("已完成");
+    wrapper.unmount();
+  });
+
+  it("把版本冲突映射为可恢复提示", async () => {
+    vi.spyOn(api, "approveArtifact").mockRejectedValue(
+      new ApiError(409, "VERSION_CONFLICT", "raw response body"),
+    );
+    const wrapper = mount(DecisionDetail, {
+      props: { decision, onRefresh: vi.fn() },
+    });
+    await wrapper.get(".product-primary-action").trigger("click");
+    expect(wrapper.text()).toContain("内容已更新，请重新审阅");
+    expect(wrapper.text()).not.toContain("raw response body");
+    wrapper.unmount();
+  });
+
+  it("展示项目空间的目标和项目负责人视角摘要", () => {
+    const wrapper = mount(ProjectSpace, {
+      props: {
+        project: { id: "project-1", name: "支付平台", goal: "交付重构" },
+        tasks: [],
+        decisions: [decision],
+        artifacts: [],
+        activeRuns: [],
+      },
+    });
+    expect(wrapper.text()).toContain("支付平台");
+    expect(wrapper.text()).toContain("项目目标");
+    expect(wrapper.text()).toContain("待决策");
   });
 });
