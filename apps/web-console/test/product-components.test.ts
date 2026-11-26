@@ -100,6 +100,19 @@ describe("正式产品首页", () => {
     wrapper.unmount();
   });
 
+  it("把未知审批错误映射为固定的安全提示", async () => {
+    vi.spyOn(api, "approveArtifact").mockRejectedValue(
+      new ApiError(500, "INTERNAL_ERROR", "internal path /secret/workspace"),
+    );
+    const wrapper = mount(DecisionDetail, {
+      props: { decision, onRefresh: vi.fn() },
+    });
+    await wrapper.get(".product-primary-action").trigger("click");
+    expect(wrapper.text()).toContain("项目状态暂时无法更新，请稍后重试");
+    expect(wrapper.text()).not.toContain("/secret/workspace");
+    wrapper.unmount();
+  });
+
   it("展示项目空间的目标和项目负责人视角摘要", () => {
     const wrapper = mount(ProjectSpace, {
       props: {

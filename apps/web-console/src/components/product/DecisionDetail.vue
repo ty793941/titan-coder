@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ArrowLeft, ArrowRight, CircleCheck, FileCheck2, RotateCcw } from "lucide-vue-next";
 import { ref } from "vue";
-import { api, ApiError, errorMessage } from "../../api";
+import { api, ApiError } from "../../api";
 import type { ProductDecision } from "../../product/types";
+import { productErrorMessage } from "../../product/errors";
 
 const props = defineProps<{
   decision: ProductDecision;
@@ -44,7 +45,7 @@ async function act() {
   } catch (caught) {
     error.value = caught instanceof ApiError && caught.status === 409
       ? "内容已更新，请重新审阅后再做决定。"
-      : errorMessage(caught);
+      : productErrorMessage(caught);
   } finally {
     busy.value = false;
   }

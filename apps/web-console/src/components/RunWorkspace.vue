@@ -158,7 +158,9 @@ watch(
 watch(
   runs,
   (values) => {
-    if (!values.some((item) => item.id === selectedRunId.value))
+    if (props.initialRunId && values.some((item) => item.id === props.initialRunId))
+      selectedRunId.value = props.initialRunId;
+    else if (!values.some((item) => item.id === selectedRunId.value))
       selectedRunId.value = values[0]?.id || "";
   },
   { immediate: true },

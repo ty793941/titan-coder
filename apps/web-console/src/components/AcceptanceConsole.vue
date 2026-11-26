@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   ArrowUpRight,
   ArrowRight,
@@ -50,7 +50,7 @@ const {
   refresh,
 } = useConsole();
 type View = "tasks" | "runs" | "artifacts" | "environment";
-const view = ref<View>("tasks");
+const view = ref<View>(props.initialRunId ? "runs" : "tasks");
 const nav = [
   {
     id: "tasks" as const,
@@ -97,6 +97,17 @@ const activeRuns = computed(
 const keyCount = computed(
   () => local.value?.credentials.filter((item) => item.configured).length || 0,
 );
+function selectInitialRun() {
+  if (!props.initialRunId) return;
+  const run = state.value.runs.find((item) => item.id === props.initialRunId);
+  const session = run && state.value.sessions.find((item) => item.id === run.sessionId);
+  const targetTask = session && state.value.tasks.find((item) => item.id === session.taskId);
+  if (!targetTask) return;
+  projectId.value = targetTask.projectId;
+  taskId.value = targetTask.id;
+  view.value = "runs";
+}
+watch(() => [state.value.runs, state.value.sessions, state.value.tasks], selectInitialRun, { deep: true, immediate: true });
 const notification = ref("");
 let notificationTimer: ReturnType<typeof setTimeout> | undefined;
 function notify(message: string) {
