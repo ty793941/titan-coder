@@ -60,7 +60,7 @@ with sync_playwright() as playwright:
     expect(page.get_by_role("button", name="明确退款进度方案与成功标准", exact=True)).to_be_visible()
     expect(page.locator(".product-story-stage")).to_contain_text("研究分析")
     page.get_by_role("button", name="询问项目经理").click()
-    expect(page.get_by_role("region", name="项目经理摘要")).to_contain_text("实时项目经理对话尚未接入")
+    expect(page.get_by_role("region", name="项目经理对话")).to_contain_text("带着当前项目目标和工作阶段")
     page.screenshot(path=str(Path(args.screenshots) / "formal-project.png"), full_page=True, animations="disabled")
     page.goto(f"{args.base_url}/#/deliveries", wait_until="networkidle")
     delivery = page.locator(f'[data-artifact-id="{artifact["artifactId"]}"]')

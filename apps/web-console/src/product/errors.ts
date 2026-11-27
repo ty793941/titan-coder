@@ -1,6 +1,15 @@
 import { ApiError } from "../api";
 
 const messages: Record<string, string> = {
+  CONVERSATION_UNAVAILABLE: "项目经理对话暂不可用，请稍后重试。",
+  CONVERSATION_BUSY: "这个项目正在回复，或本机对话繁忙，请稍后再发送。",
+  CONVERSATION_CREDENTIAL_REQUIRED:
+    "请先配置模型凭证；使用 Codex 还需要配置 API URL。",
+  CONVERSATION_SENSITIVE_INPUT:
+    "问题中可能包含凭证，请移除 Key、Token 或私有 API URL 后重试。",
+  CONVERSATION_REQUEST_CONFLICT: "该发送请求已被使用，请调整问题后重新发送。",
+  CONVERSATION_HISTORY_INVALID:
+    "无法安全读取本机对话历史，请检查私有状态目录。",
   NETWORK_UNAVAILABLE: "暂时无法连接项目服务，请确认服务在线后重试。",
   INVALID_RESPONSE: "项目服务返回了无法识别的结果，请刷新后重试。",
   EVENT_STREAM_UNAVAILABLE: "实时活动暂时不可用，稍后会自动重试。",

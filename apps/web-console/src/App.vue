@@ -9,6 +9,7 @@ import DeliveryView from "./components/product/DeliveryView.vue";
 import ActivityView from "./components/product/ActivityView.vue";
 import ProductShell from "./components/product/ProductShell.vue";
 import GoalDialog from "./components/product/GoalDialog.vue";
+import ManagerConversation from "./components/product/ManagerConversation.vue";
 import TaskWorkspace from "./components/TaskWorkspace.vue";
 import RunWorkspace from "./components/RunWorkspace.vue";
 import EnvironmentPanel from "./components/EnvironmentPanel.vue";
@@ -228,32 +229,14 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
         @task="(id) => navigate({ name: 'task', taskId: id })"
         @ask="managerOpen = !managerOpen"
       />
-      <section
+      <ManagerConversation
         v-if="managerOpen && route.name === 'project'"
-        class="product-manager-note product-page"
-        aria-label="项目经理摘要"
-      >
-        <h2>项目进展摘要</h2>
-        <p>
-          当前有 {{ projectTasks(route.projectId).length }} 个工作目标、{{
-            projectDecisions(route.projectId).length
-          }}
-          项待决策。
-        </p>
-        <p>
-          建议优先阅读待审阅的阶段资料，再确认是否继续推进。此摘要由项目状态整理；实时项目经理对话尚未接入。
-        </p>
-        <button
-          class="product-secondary-action"
-          @click="
-            creating = {
-              projectId: route.name === 'project' ? route.projectId : undefined,
-            }
-          "
-        >
-          提出新的工作目标
-        </button>
-      </section>
+        :key="route.projectId"
+        :project-id="route.projectId"
+        :local="product.local.value"
+        @settings="navigate({ name: 'settings' })"
+        @close="managerOpen = false"
+      />
     </template>
     <main
       v-else-if="route.name === 'task' && selectedTask"

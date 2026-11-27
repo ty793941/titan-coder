@@ -13,6 +13,10 @@ import type {
   Stage,
   Task,
 } from "./types";
+import type {
+  ConversationRequest,
+  ConversationSnapshot,
+} from "@titan/contracts";
 
 export class ApiError extends Error {
   constructor(
@@ -115,6 +119,31 @@ export function createConsoleApi(base = "") {
     );
   }
   return {
+    conversation: (projectId: string, signal?: AbortSignal) =>
+      request<ConversationSnapshot>(
+        `/local-api/projects/${id(projectId)}/conversation`,
+        { signal },
+      ),
+    sendConversation: (
+      projectId: string,
+      input: ConversationRequest,
+      csrfToken: string,
+    ) =>
+      localPost<ConversationSnapshot>(
+        `/projects/${id(projectId)}/conversation/turns`,
+        input,
+        csrfToken,
+      ),
+    cancelConversation: (
+      projectId: string,
+      turnId: string,
+      csrfToken: string,
+    ) =>
+      localPost<ConversationSnapshot>(
+        `/projects/${id(projectId)}/conversation/cancel`,
+        { turnId },
+        csrfToken,
+      ),
     state: (signal?: AbortSignal) =>
       request<ConsoleState>("/api/console/state", { signal }),
     localStatus: (signal?: AbortSignal) =>

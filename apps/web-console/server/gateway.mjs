@@ -5,9 +5,17 @@ import { resolve, relative, extname, isAbsolute } from 'node:path';
 import { Readable } from 'node:stream';
 import { providers, KeychainStore } from './keychain.mjs';
 import { LocalDaemon } from './local-daemon.mjs';
+import { ConversationHost } from './conversations.mjs';
+import { conversationRequestSchema } from '../../../packages/contracts/dist/index.js';
 
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
 const messages = {
+  CONVERSATION_BUSY: '当前项目正在回复，或本机对话繁忙，请稍后重试。',
+  CONVERSATION_CREDENTIAL_REQUIRED: '请先在环境设置配置所选模型凭证，Codex 还需要 API URL。',
+  CONVERSATION_SENSITIVE_INPUT: '问题中可能包含凭证，请移除 Key、Token 或私有 API URL 后重试。',
+  CONVERSATION_REQUEST_CONFLICT: '该发送请求已被使用，请重新发送。',
+  CONVERSATION_UNAVAILABLE: '项目经理对话暂不可用，请确认本机构建完成后重试。',
+  CONVERSATION_HISTORY_INVALID: '本机对话记录无法安全读取，请检查私有状态目录。',
   LOCAL_ORIGIN_REQUIRED: '仅允许从本机验收界面执行此操作。', CSRF_INVALID: '页面安全令牌已失效，请刷新后重试。',
   INVALID_CREDENTIAL: 'Key 格式不正确，请粘贴官方 API Key。', KEYCHAIN_UNAVAILABLE: '当前系统不支持 macOS 钥匙串，请使用环境变量方式。',
   KEYCHAIN_SAVE_FAILED: '保存失败，请解锁登录钥匙串并检查系统权限提示。', DAEMON_START_FAILED: 'Daemon 启动失败，请确认控制面和构建产物可用。',
@@ -29,7 +37,7 @@ async function jsonBody(request, max = 8192) {
   catch { throw new Error('INVALID_REQUEST'); }
 }
 
-export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301', consoleToken, keychain = new KeychainStore(), daemon = new LocalDaemon(root, controlPlaneUrl), allowDevOrigin = false }) {
+export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301', consoleToken, keychain = new KeychainStore(), daemon = new LocalDaemon(root, controlPlaneUrl), conversations = new ConversationHost(root), allowDevOrigin = false }) {
   const csrfToken = randomBytes(32).toString('hex');
   const dist = resolve(root, 'apps/web-console/dist');
   const server = createServer(async (request, response) => {
@@ -47,6 +55,32 @@ export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301',
       if (mutation && (!origin || !allowed.includes(origin) || !request.headers['content-type']?.startsWith('application/json'))) throw new Error('LOCAL_ORIGIN_REQUIRED');
       if (url.pathname.startsWith('/local-api/')) {
         if (mutation && !safeEqual(request.headers['x-titan-csrf'], csrfToken)) throw new Error('CSRF_INVALID');
+        const conversation = /^\/local-api\/projects\/([A-Za-z0-9_-]{1,120})\/conversation(?:\/(turns|cancel))?$/.exec(url.pathname);
+        if (conversation) {
+          const [, projectId, action] = conversation;
+          if (!((!action && request.method === 'GET') || (action && request.method === 'POST'))) throw new Error('INVALID_REQUEST');
+          let input;
+          if (action) {
+            const body = await jsonBody(request, 32768);
+            if (action === 'turns') input = conversationRequestSchema.parse(body);
+            else {
+              if (Object.keys(body).length !== 1 || typeof body.turnId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.turnId)) throw new Error('INVALID_REQUEST');
+              input = body;
+            }
+          }
+          let snapshot;
+          try {
+            const result = await fetch(`${controlPlaneUrl}/api/console/state`, { headers: { authorization: `Bearer ${consoleToken}` }, redirect: 'error', signal: AbortSignal.timeout(5000) });
+            if (!result.ok) throw new Error();
+            snapshot = await result.json();
+          } catch { throw new Error('CONTROL_PLANE_UNAVAILABLE'); }
+          const project = snapshot.projects?.find(item => item.id === projectId);
+          if (!project) throw new Error('NOT_FOUND');
+          const context = { projectId, name: project.name.slice(0, 200), goal: project.goal.slice(0, 2000), tasks: (snapshot.tasks ?? []).filter(item => item.projectId === projectId).slice(0, 20).map(item => ({ id: item.id, title: item.title.slice(0, 200), stage: item.stage, status: item.status })) };
+          const result = await conversations.request(action === 'turns' ? 'send' : action === 'cancel' ? 'cancel' : 'read', projectId, input, context);
+          send(action === 'turns' ? 202 : 200, result);
+          return;
+        }
         if (url.pathname === '/local-api/status' && request.method === 'GET') {
           let reachable = false;
           try { reachable = (await fetch(`${controlPlaneUrl}/api/console/state?limit=1`, { headers: { authorization: `Bearer ${consoleToken}` }, signal: AbortSignal.timeout(2000) })).ok; } catch {}
@@ -112,8 +146,8 @@ export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301',
     } catch (error) {
       if (response.destroyed || response.headersSent) { response.destroy(); return; }
       const code = error instanceof Error && Object.hasOwn(messages, error.message) ? error.message : 'INVALID_REQUEST';
-      send(code === 'NOT_FOUND' ? 404 : code.includes('ORIGIN') || code === 'CSRF_INVALID' ? 403 : code === 'CONTROL_PLANE_UNAVAILABLE' ? 503 : 400, { code, message: messages[code] });
+      send(code === 'NOT_FOUND' ? 404 : code.includes('ORIGIN') || code === 'CSRF_INVALID' ? 403 : ['CONTROL_PLANE_UNAVAILABLE', 'CONVERSATION_UNAVAILABLE'].includes(code) ? 503 : ['CONVERSATION_BUSY', 'CONVERSATION_REQUEST_CONFLICT'].includes(code) ? 409 : 400, { code, message: messages[code] });
     }
   });
-  return { server, close: async () => { await daemon.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
+  return { server, close: async () => { await Promise.all([daemon.stop(), conversations.close()]); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
 }

@@ -14,7 +14,9 @@ docker compose -f infra/docker-compose.yml up -d --wait postgres
 pnpm ui
 ```
 
-打开 `http://127.0.0.1:5173/#/` 进入“我的决策”。先创建项目和工作目标，再审阅阶段资料并批准推进。在“环境设置”配置模型服务和本机执行环境；模型仅在显式启动运行后调用。开发验收入口为 `http://127.0.0.1:5173/#/acceptance`。详见 [正式 UI 操作与验收](docs/formal-ui-acceptance.md) 和 [凭证配置](docs/ui-acceptance.md)。
+打开 `http://127.0.0.1:5173/#/` 进入“我的决策”。先创建项目和工作目标，再审阅阶段资料并批准推进。在“环境设置”配置模型服务和本机执行环境；模型仅在显式启动运行或发送问题后调用。开发验收入口为 `http://127.0.0.1:5173/#/acceptance`。详见 [正式 UI 操作与验收](docs/formal-ui-acceptance.md) 和 [凭证配置](docs/ui-acceptance.md)。
+
+在项目空间点击“询问项目经理”可以使用 Codex/Qwen 进行只读问答，按项目保存本机历史并支持停止回复。只有显式发送问题才会调用模型；建议不会自动批准阶段或执行代码。配置与安全边界见 [项目经理对话说明](docs/project-manager-conversation.md)。
 
 ## 本地开发
 

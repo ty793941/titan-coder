@@ -116,6 +116,9 @@ importers:
 
   apps/web-console:
     dependencies:
+      '@titan/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       lucide-vue-next:
         specifier: ^1.0.0
         version: 1.0.0(vue@3.5.46(typescript@5.9.3))
