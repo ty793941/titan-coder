@@ -1,17 +1,17 @@
-import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   assignmentCreateRequestSchema,
   collaborationMemberRequestSchema,
   collaborationVersionRequestSchema,
-} from "@titan/contracts";
+} from '@titan/contracts';
 import {
   CollaborationContext,
   activeAssignments,
   checkVersion,
   view,
-} from "./collaboration-context.js";
+} from './collaboration-context.js';
 
 @Injectable()
 export class CollaborationService {
@@ -23,20 +23,20 @@ export class CollaborationService {
   async createWorkItem(taskId: string) {
     return this.context.database.db.transaction().execute(async (trx) => {
       const task = await trx
-        .selectFrom("task")
-        .select(["id", "project_id"])
-        .where("id", "=", taskId)
+        .selectFrom('task')
+        .select(['id', 'project_id'])
+        .where('id', '=', taskId)
         .executeTakeFirst();
-      if (!task) throw new DomainError("COLLABORATION_NOT_FOUND", "任务不存在");
+      if (!task) throw new DomainError('COLLABORATION_NOT_FOUND', '任务不存在');
       await this.context.project(trx, task.project_id);
       const existing = await trx
-        .selectFrom("work_item")
+        .selectFrom('work_item')
         .selectAll()
-        .where("task_id", "=", taskId)
+        .where('task_id', '=', taskId)
         .executeTakeFirst();
       if (existing) return view(existing);
       const item = await trx
-        .insertInto("work_item")
+        .insertInto('work_item')
         .values({
           id: `work_${randomUUID()}`,
           project_id: task.project_id,
@@ -47,7 +47,7 @@ export class CollaborationService {
       await this.context.record(
         trx,
         item.project_id,
-        "work_item.created",
+        'work_item.created',
         item.id,
         { workItemId: item.id, taskId },
         taskId,
@@ -61,55 +61,55 @@ export class CollaborationService {
     return this.context.database.db.transaction().execute(async (trx) => {
       await this.context.project(trx, projectId);
       const existing = await trx
-        .selectFrom("project_member")
+        .selectFrom('project_member')
         .selectAll()
-        .where("project_id", "=", projectId)
-        .where("subject_type", "=", parsed.subjectType)
-        .where("subject_id", "=", parsed.subjectId)
+        .where('project_id', '=', projectId)
+        .where('subject_type', '=', parsed.subjectType)
+        .where('subject_id', '=', parsed.subjectId)
         .executeTakeFirst();
       if (existing) {
         if (parsed.expectedVersion === undefined) {
-          if (existing.role === parsed.role && existing.status === "active")
+          if (existing.role === parsed.role && existing.status === 'active')
             return view(existing);
           throw new DomainError(
-            "COLLABORATION_VERSION_CONFLICT",
-            "更新成员需要expectedVersion",
+            'COLLABORATION_VERSION_CONFLICT',
+            '更新成员需要expectedVersion',
           );
         }
         checkVersion(existing.version, parsed.expectedVersion);
         const updated = await trx
-          .updateTable("project_member")
+          .updateTable('project_member')
           .set({ role: parsed.role, version: existing.version + 1 })
-          .where("id", "=", existing.id)
+          .where('id', '=', existing.id)
           .returningAll()
           .executeTakeFirstOrThrow();
         await this.context.record(
           trx,
           projectId,
-          "project.member.updated",
+          'project.member.updated',
           updated.id,
           { memberId: updated.id, version: updated.version },
         );
         return view(updated);
       }
       if (parsed.expectedVersion !== undefined)
-        throw new DomainError("COLLABORATION_VERSION_CONFLICT", "成员尚不存在");
+        throw new DomainError('COLLABORATION_VERSION_CONFLICT', '成员尚不存在');
       const member = await trx
-        .insertInto("project_member")
+        .insertInto('project_member')
         .values({
           id: `member_${randomUUID()}`,
           project_id: projectId,
           subject_type: parsed.subjectType,
           subject_id: parsed.subjectId,
           role: parsed.role,
-          status: "active",
+          status: 'active',
         })
         .returningAll()
         .executeTakeFirstOrThrow();
       await this.context.record(
         trx,
         projectId,
-        "project.member.added",
+        'project.member.added',
         member.id,
         {
           memberId: member.id,
@@ -125,11 +125,11 @@ export class CollaborationService {
   async listMembers(projectId: string) {
     return (
       await this.context.database.db
-        .selectFrom("project_member")
+        .selectFrom('project_member')
         .selectAll()
-        .where("project_id", "=", projectId)
-        .orderBy("created_at")
-        .orderBy("id")
+        .where('project_id', '=', projectId)
+        .orderBy('created_at')
+        .orderBy('id')
         .limit(100)
         .execute()
     ).map(view);
@@ -137,11 +137,11 @@ export class CollaborationService {
 
   async getWorkItem(id: string) {
     const row = await this.context.database.db
-      .selectFrom("work_item")
+      .selectFrom('work_item')
       .selectAll()
-      .where("id", "=", id)
+      .where('id', '=', id)
       .executeTakeFirst();
-    if (!row) throw new DomainError("COLLABORATION_NOT_FOUND", "工作项不存在");
+    if (!row) throw new DomainError('COLLABORATION_NOT_FOUND', '工作项不存在');
     return { ...view(row), assignments: await this.listAssignments(id) };
   }
 
@@ -153,15 +153,15 @@ export class CollaborationService {
     const parsed = assignmentCreateRequestSchema.parse(input);
     const key = headerKey ?? parsed.idempotencyKey;
     if (!key || key.length > 200 || !key.trim())
-      throw new DomainError("VALIDATION_FAILED", "需要Idempotency-Key");
+      throw new DomainError('VALIDATION_FAILED', '需要Idempotency-Key');
     return this.context.database.db.transaction().execute(async (trx) => {
       const item = await trx
-        .selectFrom("work_item")
+        .selectFrom('work_item')
         .selectAll()
-        .where("id", "=", workItemId)
+        .where('id', '=', workItemId)
         .executeTakeFirst();
       if (!item)
-        throw new DomainError("COLLABORATION_NOT_FOUND", "工作项不存在");
+        throw new DomainError('COLLABORATION_NOT_FOUND', '工作项不存在');
       await this.context.project(trx, item.project_id);
       const scope = `work-item:${workItemId}:assignment`;
       const replay = await this.context.idempotency.read<
@@ -175,23 +175,23 @@ export class CollaborationService {
         parsed.subjectId,
       );
       for (const reviewer of parsed.reviewers)
-        await this.context.member(trx, item.project_id, "human", reviewer);
-      if (["human-owner", "agent-owner"].includes(parsed.responsibility)) {
+        await this.context.member(trx, item.project_id, 'human', reviewer);
+      if (['human-owner', 'agent-owner'].includes(parsed.responsibility)) {
         const duplicate = await trx
-          .selectFrom("assignment")
-          .select("id")
-          .where("work_item_id", "=", workItemId)
-          .where("responsibility", "=", parsed.responsibility)
-          .where("status", "in", activeAssignments)
+          .selectFrom('assignment')
+          .select('id')
+          .where('work_item_id', '=', workItemId)
+          .where('responsibility', '=', parsed.responsibility)
+          .where('status', 'in', activeAssignments)
           .executeTakeFirst();
         if (duplicate)
           throw new DomainError(
-            "COLLABORATION_DUPLICATE",
-            "工作项已有当前责任人",
+            'COLLABORATION_DUPLICATE',
+            '工作项已有当前责任人',
           );
       }
       const row = await trx
-        .insertInto("assignment")
+        .insertInto('assignment')
         .values({
           id: `assignment_${randomUUID()}`,
           project_id: item.project_id,
@@ -199,7 +199,7 @@ export class CollaborationService {
           subject_type: parsed.subjectType,
           subject_id: parsed.subjectId,
           responsibility: parsed.responsibility,
-          status: "pending",
+          status: 'pending',
           reviewers: JSON.stringify(parsed.reviewers),
           due_at: parsed.dueAt ? new Date(parsed.dueAt) : null,
         })
@@ -210,13 +210,13 @@ export class CollaborationService {
         item.project_id,
         row.subject_type,
         row.subject_id,
-        "assignment",
+        'assignment',
         row.id,
       );
       await this.context.record(
         trx,
         item.project_id,
-        "assignment.created",
+        'assignment.created',
         row.id,
         {
           assignmentId: row.id,
@@ -243,11 +243,11 @@ export class CollaborationService {
   async listAssignments(id: string) {
     return (
       await this.context.database.db
-        .selectFrom("assignment")
+        .selectFrom('assignment')
         .selectAll()
-        .where("work_item_id", "=", id)
-        .orderBy("created_at")
-        .orderBy("id")
+        .where('work_item_id', '=', id)
+        .orderBy('created_at')
+        .orderBy('id')
         .limit(100)
         .execute()
     ).map(view);
@@ -255,22 +255,22 @@ export class CollaborationService {
 
   async changeAssignment(
     id: string,
-    action: "accept" | "decline" | "complete",
+    action: 'accept' | 'decline' | 'complete',
     input: unknown,
   ) {
     const parsed = collaborationVersionRequestSchema.parse(input);
     return this.context.database.db.transaction().execute(async (trx) => {
       const row = await trx
-        .selectFrom("assignment")
+        .selectFrom('assignment')
         .selectAll()
-        .where("id", "=", id)
+        .where('id', '=', id)
         .executeTakeFirst();
-      if (!row) throw new DomainError("COLLABORATION_NOT_FOUND", "分配不存在");
+      if (!row) throw new DomainError('COLLABORATION_NOT_FOUND', '分配不存在');
       await this.context.project(trx, row.project_id);
       const current = await trx
-        .selectFrom("assignment")
+        .selectFrom('assignment')
         .selectAll()
-        .where("id", "=", id)
+        .where('id', '=', id)
         .executeTakeFirstOrThrow();
       await this.context.myAction(
         trx,
@@ -279,9 +279,9 @@ export class CollaborationService {
         current.subject_id,
       );
       const next = {
-        accept: "accepted",
-        decline: "declined",
-        complete: "completed",
+        accept: 'accepted',
+        decline: 'declined',
+        complete: 'completed',
       }[action];
       if (
         current.status === next &&
@@ -291,32 +291,32 @@ export class CollaborationService {
       checkVersion(current.version, parsed.expectedVersion);
       if (
         !(
-          action === "complete" ? ["accepted", "active"] : ["pending"]
+          action === 'complete' ? ['accepted', 'active'] : ['pending']
         ).includes(current.status)
       )
         throw new DomainError(
-          "COLLABORATION_INVALID_STATE",
-          "当前状态不能执行此操作",
+          'COLLABORATION_INVALID_STATE',
+          '当前状态不能执行此操作',
         );
       if (
         await trx
-          .selectFrom("handoff")
-          .select("id")
-          .where("from_assignment_id", "=", id)
-          .where("status", "=", "pending_acceptance")
+          .selectFrom('handoff')
+          .select('id')
+          .where('from_assignment_id', '=', id)
+          .where('status', '=', 'pending_acceptance')
           .executeTakeFirst()
       )
         throw new DomainError(
-          "COLLABORATION_HANDOFF_CONFLICT",
-          "待处理交接必须先完成",
+          'COLLABORATION_HANDOFF_CONFLICT',
+          '待处理交接必须先完成',
         );
       const updated = await trx
-        .updateTable("assignment")
+        .updateTable('assignment')
         .set({ status: next, version: current.version + 1 })
-        .where("id", "=", id)
+        .where('id', '=', id)
         .returningAll()
         .executeTakeFirstOrThrow();
-      await this.context.resolveInbox(trx, row.project_id, "assignment", id);
+      await this.context.resolveInbox(trx, row.project_id, 'assignment', id);
       await this.context.record(trx, row.project_id, `assignment.${next}`, id, {
         assignmentId: id,
         version: updated.version,

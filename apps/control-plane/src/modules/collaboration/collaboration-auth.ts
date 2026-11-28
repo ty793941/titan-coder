@@ -2,8 +2,8 @@ import {
   Injectable,
   type CanActivate,
   type ExecutionContext,
-} from "@nestjs/common";
-import { authenticateConsole } from "../../common/console-auth.js";
+} from '@nestjs/common';
+import { authenticateConsole } from '../../common/console-auth.js';
 
 @Injectable()
 export class CollaborationConsoleGuard implements CanActivate {

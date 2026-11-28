@@ -1,17 +1,17 @@
-import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   collaborationReviewDecisionSchema,
   reviewRequestCreateSchema,
-} from "@titan/contracts";
+} from '@titan/contracts';
 import {
   CollaborationContext,
   checkVersion,
   localActor,
   view,
   type CollaborationTransaction,
-} from "./collaboration-context.js";
+} from './collaboration-context.js';
 
 @Injectable()
 export class CollaborationReviewsService {
@@ -26,49 +26,49 @@ export class CollaborationReviewsService {
     type: string,
     id: string,
   ) {
-    if (type === "task") {
+    if (type === 'task') {
       const row = await trx
-        .selectFrom("task")
+        .selectFrom('task')
         .selectAll()
-        .where("id", "=", id)
-        .where("project_id", "=", projectId)
+        .where('id', '=', id)
+        .where('project_id', '=', projectId)
         .forUpdate()
         .executeTakeFirst();
       if (row) return { version: row.version, stage: row.stage };
-    } else if (type === "artifact") {
+    } else if (type === 'artifact') {
       const row = await trx
-        .selectFrom("artifact")
+        .selectFrom('artifact')
         .selectAll()
-        .where("artifact_id", "=", id)
-        .where("project_id", "=", projectId)
+        .where('artifact_id', '=', id)
+        .where('project_id', '=', projectId)
         .forUpdate()
         .executeTakeFirst();
-      if (row && row.status !== "archived")
+      if (row && row.status !== 'archived')
         return { version: row.version, stage: row.type };
-    } else if (type === "work-item") {
+    } else if (type === 'work-item') {
       const row = await trx
-        .selectFrom("work_item")
+        .selectFrom('work_item')
         .selectAll()
-        .where("id", "=", id)
-        .where("project_id", "=", projectId)
+        .where('id', '=', id)
+        .where('project_id', '=', projectId)
         .forUpdate()
         .executeTakeFirst();
       if (row) return { version: row.version };
-    } else if (type === "run") {
+    } else if (type === 'run') {
       const row = await trx
-        .selectFrom("run")
-        .innerJoin("session", "session.id", "run.session_id")
-        .innerJoin("task", "task.id", "session.task_id")
-        .select(["run.version"])
-        .where("run.id", "=", id)
-        .where("task.project_id", "=", projectId)
-        .forUpdate("run")
+        .selectFrom('run')
+        .innerJoin('session', 'session.id', 'run.session_id')
+        .innerJoin('task', 'task.id', 'session.task_id')
+        .select(['run.version'])
+        .where('run.id', '=', id)
+        .where('task.project_id', '=', projectId)
+        .forUpdate('run')
         .executeTakeFirst();
       if (row) return { version: row.version };
     }
     throw new DomainError(
-      "COLLABORATION_NOT_FOUND",
-      "评审目标不属于当前项目或已不可用",
+      'COLLABORATION_NOT_FOUND',
+      '评审目标不属于当前项目或已不可用',
     );
   }
 
@@ -76,7 +76,7 @@ export class CollaborationReviewsService {
     const parsed = reviewRequestCreateSchema.parse(input);
     key ??= parsed.idempotencyKey;
     if (!key || key.length > 200 || !key.trim())
-      throw new DomainError("VALIDATION_FAILED", "需要Idempotency-Key");
+      throw new DomainError('VALIDATION_FAILED', '需要Idempotency-Key');
     const requestKey = key;
     return this.context.database.db.transaction().execute(async (trx) => {
       await this.context.project(trx, parsed.projectId);
@@ -91,10 +91,10 @@ export class CollaborationReviewsService {
         parsed.reviewerSubject.subjectType,
         parsed.reviewerSubject.subjectId,
       );
-      if (!["owner", "manager", "reviewer"].includes(member.role))
+      if (!['owner', 'manager', 'reviewer'].includes(member.role))
         throw new DomainError(
-          "COLLABORATION_PERMISSION_DENIED",
-          "评审主体缺少评审角色",
+          'COLLABORATION_PERMISSION_DENIED',
+          '评审主体缺少评审角色',
         );
       const target = await this.target(
         trx,
@@ -104,19 +104,19 @@ export class CollaborationReviewsService {
       );
       if (target.stage && target.stage !== parsed.gate)
         throw new DomainError(
-          "COLLABORATION_INVALID_STATE",
-          "评审门禁不匹配目标阶段",
+          'COLLABORATION_INVALID_STATE',
+          '评审门禁不匹配目标阶段',
         );
       const pending = await trx
-        .selectFrom("review_request")
+        .selectFrom('review_request')
         .selectAll()
-        .where("project_id", "=", parsed.projectId)
-        .where("target_type", "=", parsed.targetType)
-        .where("target_id", "=", parsed.targetId)
-        .where("gate", "=", parsed.gate)
-        .where("status", "=", "pending")
-        .orderBy("created_at")
-        .orderBy("id")
+        .where('project_id', '=', parsed.projectId)
+        .where('target_type', '=', parsed.targetType)
+        .where('target_id', '=', parsed.targetId)
+        .where('gate', '=', parsed.gate)
+        .where('status', '=', 'pending')
+        .orderBy('created_at')
+        .orderBy('id')
         .execute();
       if (
         pending.some(
@@ -125,9 +125,9 @@ export class CollaborationReviewsService {
             row.reviewer_id === parsed.reviewerSubject.subjectId,
         )
       )
-        throw new DomainError("COLLABORATION_DUPLICATE", "已有相同待处理评审");
+        throw new DomainError('COLLABORATION_DUPLICATE', '已有相同待处理评审');
       const row = await trx
-        .insertInto("review_request")
+        .insertInto('review_request')
         .values({
           id: `review_${randomUUID()}`,
           project_id: parsed.projectId,
@@ -142,7 +142,7 @@ export class CollaborationReviewsService {
           resolved_at: null,
           target_version: target.version,
           predecessor_id:
-            parsed.mode === "serial" ? (pending.at(-1)?.id ?? null) : null,
+            parsed.mode === 'serial' ? (pending.at(-1)?.id ?? null) : null,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -151,13 +151,13 @@ export class CollaborationReviewsService {
         row.project_id,
         row.reviewer_type,
         row.reviewer_id,
-        "review",
+        'review',
         row.id,
       );
       await this.context.record(
         trx,
         row.project_id,
-        "review.requested",
+        'review.requested',
         row.id,
         {
           reviewId: row.id,
@@ -183,11 +183,11 @@ export class CollaborationReviewsService {
   async list(projectId: string) {
     return (
       await this.context.database.db
-        .selectFrom("review_request")
+        .selectFrom('review_request')
         .selectAll()
-        .where("project_id", "=", projectId)
-        .orderBy("created_at", "desc")
-        .orderBy("id")
+        .where('project_id', '=', projectId)
+        .orderBy('created_at', 'desc')
+        .orderBy('id')
         .limit(100)
         .execute()
     ).map(view);
@@ -195,27 +195,27 @@ export class CollaborationReviewsService {
 
   async decide(
     id: string,
-    action: "approved" | "changes_requested" | "cancelled",
+    action: 'approved' | 'changes_requested' | 'cancelled',
     input: unknown,
   ) {
     const parsed = collaborationReviewDecisionSchema.parse(input);
-    if (action === "changes_requested" && !parsed.reason)
-      throw new DomainError("VALIDATION_FAILED", "要求修改必须说明原因");
+    if (action === 'changes_requested' && !parsed.reason)
+      throw new DomainError('VALIDATION_FAILED', '要求修改必须说明原因');
     return this.context.database.db.transaction().execute(async (trx) => {
       const source = await trx
-        .selectFrom("review_request")
+        .selectFrom('review_request')
         .selectAll()
-        .where("id", "=", id)
+        .where('id', '=', id)
         .executeTakeFirst();
       if (!source)
-        throw new DomainError("COLLABORATION_NOT_FOUND", "评审不存在");
+        throw new DomainError('COLLABORATION_NOT_FOUND', '评审不存在');
       await this.context.project(trx, source.project_id);
       const row = await trx
-        .selectFrom("review_request")
+        .selectFrom('review_request')
         .selectAll()
-        .where("id", "=", id)
+        .where('id', '=', id)
         .executeTakeFirstOrThrow();
-      if (action !== "cancelled") {
+      if (action !== 'cancelled') {
         await this.context.myAction(
           trx,
           row.project_id,
@@ -228,22 +228,22 @@ export class CollaborationReviewsService {
           row.reviewer_type,
           row.reviewer_id,
         );
-        if (!["owner", "manager", "reviewer"].includes(member.role))
+        if (!['owner', 'manager', 'reviewer'].includes(member.role))
           throw new DomainError(
-            "COLLABORATION_PERMISSION_DENIED",
-            "评审角色已撤销",
+            'COLLABORATION_PERMISSION_DENIED',
+            '评审角色已撤销',
           );
       }
       if (row.status === action && row.version === parsed.expectedVersion + 1)
         return view(row);
       checkVersion(row.version, parsed.expectedVersion);
-      if (row.status !== "pending")
-        throw new DomainError("COLLABORATION_INVALID_STATE", "评审已结束");
-      if (action !== "cancelled") {
+      if (row.status !== 'pending')
+        throw new DomainError('COLLABORATION_INVALID_STATE', '评审已结束');
+      if (action !== 'cancelled') {
         if (row.due_at && row.due_at <= new Date())
           throw new DomainError(
-            "COLLABORATION_INVALID_STATE",
-            "评审期限已过，请取消后重新发起",
+            'COLLABORATION_INVALID_STATE',
+            '评审期限已过，请取消后重新发起',
           );
         const target = await this.target(
           trx,
@@ -254,36 +254,36 @@ export class CollaborationReviewsService {
         checkVersion(target.version, row.target_version);
         if (row.predecessor_id) {
           const prior = await trx
-            .selectFrom("review_request")
-            .select("status")
-            .where("id", "=", row.predecessor_id)
+            .selectFrom('review_request')
+            .select('status')
+            .where('id', '=', row.predecessor_id)
             .executeTakeFirstOrThrow();
-          if (prior.status !== "approved")
+          if (prior.status !== 'approved')
             throw new DomainError(
-              "COLLABORATION_REVIEW_REQUIRED",
-              "串行前序评审尚未批准",
+              'COLLABORATION_REVIEW_REQUIRED',
+              '串行前序评审尚未批准',
             );
         }
       }
       const updated = await trx
-        .updateTable("review_request")
+        .updateTable('review_request')
         .set({
           status: action,
           resolution_reason: parsed.reason ?? null,
           resolved_at: new Date(),
           version: row.version + 1,
         })
-        .where("id", "=", id)
+        .where('id', '=', id)
         .returningAll()
         .executeTakeFirstOrThrow();
-      await this.context.resolveInbox(trx, row.project_id, "review", id);
-      if (action === "changes_requested")
+      await this.context.resolveInbox(trx, row.project_id, 'review', id);
+      if (action === 'changes_requested')
         await this.context.inbox(
           trx,
           row.project_id,
-          "human",
+          'human',
           localActor.id,
-          "blocked",
+          'blocked',
           id,
         );
       await this.context.record(trx, row.project_id, `review.${action}`, id, {

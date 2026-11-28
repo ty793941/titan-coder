@@ -30,11 +30,17 @@ import { OrchestrationController } from './modules/orchestration/orchestration.c
 import { WorkflowInternalController } from './modules/orchestration/workflow-internal.controller.js';
 import { WorkProposalsController } from './modules/work-proposals/work-proposals.controller.js';
 import { WorkProposalsService } from './modules/work-proposals/work-proposals.service.js';
-import { CollaborationModule } from './modules/collaboration/collaboration.module.js';
+import { CollaborationController } from './modules/collaboration/collaboration.controller.js';
+import { CollaborationContext } from './modules/collaboration/collaboration-context.js';
+import { CollaborationService } from './modules/collaboration/collaboration.service.js';
+import { CollaborationReviewsService } from './modules/collaboration/collaboration-reviews.service.js';
+import { CollaborationHandoffsService } from './modules/collaboration/collaboration-handoffs.service.js';
+import { CollaborationInboxService } from './modules/collaboration/collaboration-inbox.service.js';
+import { CollaborationConsoleGuard } from './modules/collaboration/collaboration-auth.js';
 
 @Module({
-  imports: [DatabaseModule, CollaborationModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController, OrchestrationController, WorkflowInternalController, WorkProposalsController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService, WorkflowAuth, BackgroundJobsService, WorkflowCommandsService, SchedulesService, WorkProposalsService],
+  imports: [DatabaseModule],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController, OrchestrationController, WorkflowInternalController, WorkProposalsController, CollaborationController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService, WorkflowAuth, BackgroundJobsService, WorkflowCommandsService, SchedulesService, WorkProposalsService, CollaborationContext, CollaborationService, CollaborationReviewsService, CollaborationHandoffsService, CollaborationInboxService, CollaborationConsoleGuard],
 })
 export class AppModule {}

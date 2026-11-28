@@ -1,42 +1,42 @@
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { Pool } from "pg";
-import { expect, it } from "vitest";
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { Pool } from 'pg';
+import { expect, it } from 'vitest';
 
-it("creates collaboration tables idempotently with unique project responsibilities", async () => {
+it('creates collaboration tables idempotently with unique project responsibilities', async () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  const schema = `collaboration_${randomUUID().replaceAll("-", "")}`;
+  const schema = `collaboration_${randomUUID().replaceAll('-', '')}`;
   const client = await pool.connect();
   try {
     await client.query(`CREATE SCHEMA ${schema}`);
     await client.query(`SET search_path TO ${schema}`);
     const structure = await readFile(
-      new URL("../../../database/schema.sql", import.meta.url),
-      "utf8",
+      new URL('../../../database/schema.sql', import.meta.url),
+      'utf8',
     );
     await client.query(structure);
     await client.query(structure);
     const tables = await client.query(
-      "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_name = ANY($2)",
+      'SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_name = ANY($2)',
       [
         schema,
         [
-          "project_member",
-          "work_item",
-          "assignment",
-          "review_request",
-          "handoff",
-          "collaboration_inbox_item",
+          'project_member',
+          'work_item',
+          'assignment',
+          'review_request',
+          'handoff',
+          'collaboration_inbox_item',
         ],
       ],
     );
     expect(tables.rows.map((row) => row.table_name).sort()).toEqual([
-      "assignment",
-      "collaboration_inbox_item",
-      "handoff",
-      "project_member",
-      "review_request",
-      "work_item",
+      'assignment',
+      'collaboration_inbox_item',
+      'handoff',
+      'project_member',
+      'review_request',
+      'work_item',
     ]);
     const project = `project_${randomUUID()}`;
     const task = `task_${randomUUID()}`;
@@ -53,7 +53,7 @@ it("creates collaboration tables idempotently with unique project responsibiliti
       [task, project],
     );
     await client.query(
-      "INSERT INTO work_item (id, project_id, task_id) VALUES ($1, $2, $3)",
+      'INSERT INTO work_item (id, project_id, task_id) VALUES ($1, $2, $3)',
       [workItem, project, task],
     );
     await client.query(
@@ -69,9 +69,9 @@ it("creates collaboration tables idempotently with unique project responsibiliti
         "INSERT INTO assignment (id, project_id, work_item_id, subject_type, subject_id, responsibility) VALUES ($1, $2, $3, 'human', 'member-2', 'human-owner')",
         [`assignment_${randomUUID()}`, project, workItem],
       ),
-    ).rejects.toMatchObject({ code: "23505" });
+    ).rejects.toMatchObject({ code: '23505' });
   } finally {
-    await client.query("SET search_path TO public");
+    await client.query('SET search_path TO public');
     await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     client.release();
     await pool.end();
