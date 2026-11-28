@@ -290,6 +290,7 @@ export class ConversationDaemon {
               try {
                 if (reply.length > 32000 || containsSensitive(reply, secrets) || /(?:https?|wss?):\/\//i.test(reply)) throw new Error();
                 const proposal = workProposalSchema.parse(JSON.parse(reply));
+                if (containsSensitive(proposal, secrets)) throw new Error();
                 const proposalChecksum = `sha256:${createHash("sha256").update(JSON.stringify(proposal)).digest("hex")}`;
                 return this.finish(context.projectId, turn.id, { status: "completed", proposal, proposalChecksum, reply: `已生成工作提案：${proposal.title}。确认后创建任务与待审批问题确认草稿。` });
               } catch { throw new Error("CONVERSATION_PROPOSAL_INVALID"); }

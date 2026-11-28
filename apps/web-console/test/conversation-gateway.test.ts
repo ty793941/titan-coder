@@ -70,6 +70,15 @@ async function fixture(turns: unknown[] = []) {
   return { base, token, conversations, accepted };
 }
 describe("本机项目经理网关", () => {
+  it('不允许通用API代理绕过本机历史确认和CSRF', async () => {
+    const h = await fixture();
+    for (const path of ['/api/projects/project-test/work-proposals/accept', '/api/projects/project-test/work-proposals/accept/']) {
+      const response = await fetch(`${h.base}${path}`, { method: 'POST', headers: { origin: h.base, 'content-type': 'application/json' }, body: JSON.stringify({ sourceTurnId: randomUUID(), confirmed: true }) });
+      expect(response.status).toBe(403);
+    }
+    expect(h.accepted).toHaveLength(0);
+    expect(h.conversations.request).not.toHaveBeenCalled();
+  });
   it('只从本项目已完成回合读取提案并确认，拒绝客户端替换正文', async () => {
     const proposal = { title: '退款', goal: '透明退款', acceptanceCriteria: ['可查进度'], priority: 'medium', questions: '# 问题确认' };
     const proposalChecksum = `sha256:${createHash('sha256').update(JSON.stringify(proposal)).digest('hex')}`;

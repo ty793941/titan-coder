@@ -18,6 +18,7 @@ const messages = {
   CONVERSATION_UNAVAILABLE: '项目经理对话暂不可用，请确认本机构建完成后重试。',
   CONVERSATION_HISTORY_INVALID: '本机对话记录无法安全读取，请检查私有状态目录。',
   CONVERSATION_PROPOSAL_CONFLICT: '提案未完成、版本已变化或来源不符，请重新读取后确认。',
+  PROPOSAL_CONFIRMATION_REQUIRED: '工作提案必须从本机提案确认入口提交。',
   LOCAL_ORIGIN_REQUIRED: '仅允许从本机验收界面执行此操作。', CSRF_INVALID: '页面安全令牌已失效，请刷新后重试。',
   INVALID_CREDENTIAL: 'Key 格式不正确，请粘贴官方 API Key。', KEYCHAIN_UNAVAILABLE: '当前系统不支持 macOS 钥匙串，请使用环境变量方式。',
   KEYCHAIN_SAVE_FAILED: '保存失败，请解锁登录钥匙串并检查系统权限提示。', DAEMON_START_FAILED: 'Daemon 启动失败，请确认控制面和构建产物可用。',
@@ -116,6 +117,10 @@ export function createGateway({ root, controlPlaneUrl = 'http://127.0.0.1:3301',
         send(404, { code: 'NOT_FOUND', message: messages.NOT_FOUND }); return;
       }
       if (url.pathname.startsWith('/api/')) {
+        if (/^\/api\/projects\/[^/]+\/work-proposals(?:\/|$)/.test(decodeURIComponent(url.pathname))) {
+          send(403, { code: 'PROPOSAL_CONFIRMATION_REQUIRED', message: messages.PROPOSAL_CONFIRMATION_REQUIRED });
+          return;
+        }
         const controller = new AbortController();
         response.once('close', () => controller.abort());
         let body;

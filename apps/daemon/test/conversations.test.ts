@@ -37,6 +37,20 @@ async function fixture() {
 }
 
 describe("项目对话 Daemon", () => {
+  it('JSON转义不能使实际凭证进入已解码提案或私有历史', async () => {
+    const h = await fixture();
+    const encoded = JSON.stringify({ title: '退款', goal: 'offline-private-credential', acceptanceCriteria: ['可查进度'], priority: 'medium', questions: '问题确认' }).replaceAll('o', '\\u006f');
+    h.execute.mockResolvedValue(encoded);
+    try {
+      await h.service.send(context, { ...request(), mode: 'work-proposal' });
+      await vi.waitFor(async () => expect((await h.service.read(context.projectId)).turns[0]?.status).toBe('failed'));
+      const snapshot = await h.service.read(context.projectId);
+      expect(snapshot.turns[0]?.errorCode).toBe('CONVERSATION_PROPOSAL_INVALID');
+      expect(JSON.stringify(snapshot)).not.toContain('offline-private-credential');
+      const files = (await readdir(h.directory)).filter(name => name.endsWith('.json'));
+      expect(await readFile(join(h.directory, files[0]!), 'utf8')).not.toContain('offline-private-credential');
+    } finally { await h.service.close(); }
+  });
   it('取消与模型完成交错时不留下可确认的提案', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'titan-proposal-cancel-'));
     let resolve!: (value: string) => void;
