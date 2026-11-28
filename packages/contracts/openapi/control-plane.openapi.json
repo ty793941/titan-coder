@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-28T06:40:44.240Z"
+    "generatedAt": "2026-11-28T06:52:26.121Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -7617,10 +7617,7 @@
           },
           "requiredDecision": {
             "type": "string",
-            "enum": [
-              "approve",
-              "changes_requested"
-            ]
+            "const": "approve"
           },
           "mode": {
             "type": "string",
@@ -8242,10 +8239,7 @@
           },
           "requiredDecision": {
             "type": "string",
-            "enum": [
-              "approve",
-              "changes_requested"
-            ]
+            "const": "approve"
           },
           "mode": {
             "type": "string",

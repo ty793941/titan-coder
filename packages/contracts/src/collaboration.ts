@@ -90,7 +90,7 @@ export const reviewRequestCreateSchema = z
       'review',
       'release',
     ]),
-    requiredDecision: z.enum(['approve', 'changes_requested']),
+    requiredDecision: z.literal('approve'),
     mode: z.enum(['serial', 'parallel']).default('serial'),
     dueAt: instant.optional(),
     idempotencyKey: key.optional(),

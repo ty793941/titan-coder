@@ -153,6 +153,7 @@ export class CollaborationHandoffsService {
   }
 
   async list(workItemId: string) {
+    await this.context.existingWorkItem(workItemId);
     return (
       await this.context.database.db
         .selectFrom('handoff')

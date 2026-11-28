@@ -118,6 +118,11 @@ export class CollaborationReviewsService {
         .orderBy('created_at')
         .orderBy('id')
         .execute();
+      if (pending.some((row) => row.mode !== parsed.mode))
+        throw new DomainError(
+          'COLLABORATION_INVALID_STATE',
+          '当前门禁已有不同模式的待处理评审，请先关闭原队列',
+        );
       if (
         pending.some(
           (row) =>
@@ -126,6 +131,9 @@ export class CollaborationReviewsService {
         )
       )
         throw new DomainError('COLLABORATION_DUPLICATE', '已有相同待处理评审');
+      // 时间戳可能来自先开始、后取得项目锁的事务，串行尾节点应由关系确定。
+      const predecessors = new Set(pending.map((row) => row.predecessor_id));
+      const tail = pending.find((row) => !predecessors.has(row.id));
       const row = await trx
         .insertInto('review_request')
         .values({
@@ -141,8 +149,7 @@ export class CollaborationReviewsService {
           due_at: parsed.dueAt ? new Date(parsed.dueAt) : null,
           resolved_at: null,
           target_version: target.version,
-          predecessor_id:
-            parsed.mode === 'serial' ? (pending.at(-1)?.id ?? null) : null,
+          predecessor_id: parsed.mode === 'serial' ? (tail?.id ?? null) : null,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -181,6 +188,7 @@ export class CollaborationReviewsService {
   }
 
   async list(projectId: string) {
+    await this.context.existingProject(projectId);
     return (
       await this.context.database.db
         .selectFrom('review_request')

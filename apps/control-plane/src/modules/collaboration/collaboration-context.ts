@@ -33,6 +33,24 @@ export class CollaborationContext {
     @Inject(EventsService) private readonly events: EventsService,
   ) {}
 
+  async existingProject(projectId: string) {
+    const row = await this.database.db
+      .selectFrom('project')
+      .select('id')
+      .where('id', '=', projectId)
+      .executeTakeFirst();
+    if (!row) throw new DomainError('COLLABORATION_NOT_FOUND', '项目不存在');
+  }
+
+  async existingWorkItem(id: string) {
+    const row = await this.database.db
+      .selectFrom('work_item')
+      .select('id')
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!row) throw new DomainError('COLLABORATION_NOT_FOUND', '工作项不存在');
+  }
+
   async project(trx: CollaborationTransaction, projectId: string) {
     const project = await trx
       .selectFrom('project')

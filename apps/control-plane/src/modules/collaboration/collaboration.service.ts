@@ -123,6 +123,7 @@ export class CollaborationService {
   }
 
   async listMembers(projectId: string) {
+    await this.context.existingProject(projectId);
     return (
       await this.context.database.db
         .selectFrom('project_member')
@@ -241,6 +242,7 @@ export class CollaborationService {
   }
 
   async listAssignments(id: string) {
+    await this.context.existingWorkItem(id);
     return (
       await this.context.database.db
         .selectFrom('assignment')

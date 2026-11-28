@@ -45,6 +45,67 @@ async function assign() {
   return { item, assignment };
 }
 
+it('并发串行评审只有一个根节点，且不允许混用串并行队列', async () => {
+  await assign();
+  for (const subjectId of ['reviewer-a', 'reviewer-b', 'reviewer-c'])
+    await post('/api/projects/project_dev/members', {
+      subjectType: 'human',
+      subjectId,
+      role: 'reviewer',
+    }).expect(201);
+  const body = {
+    projectId: 'project_dev',
+    targetType: 'task',
+    targetId: 'task_dev',
+    gate: 'questions',
+    requiredDecision: 'approve',
+    mode: 'serial',
+  };
+  const results = await Promise.all(
+    ['reviewer-a', 'reviewer-b'].map((subjectId) =>
+      post('/api/review-requests', {
+        ...body,
+        reviewerSubject: { subjectType: 'human', subjectId },
+      }).expect(201),
+    ),
+  );
+  expect(
+    results.filter((result) => result.body.predecessorId === null),
+  ).toHaveLength(1);
+  const root = results.find(
+    (result) => result.body.predecessorId === null,
+  )!.body;
+  const second = results.find(
+    (result) => result.body.predecessorId !== null,
+  )!.body;
+  expect(second.predecessorId).toBe(root.id);
+  await api.db
+    .updateTable('review_request')
+    .set({ created_at: new Date('2020-01-01') })
+    .where('id', '=', second.id)
+    .execute();
+  const third = await post('/api/review-requests', {
+    ...body,
+    reviewerSubject: { subjectType: 'human', subjectId: 'reviewer-c' },
+  }).expect(201);
+  expect(third.body.predecessorId).toBe(second.id);
+  await post('/api/review-requests', {
+    ...body,
+    mode: 'parallel',
+    reviewerSubject: { subjectType: 'human', subjectId: 'local-user' },
+  }).expect(409);
+});
+
+it('不存在的协作父资源读取返回404而非空集合', async () => {
+  for (const path of [
+    '/api/projects/missing/members',
+    '/api/projects/missing/review-requests',
+    '/api/work-items/missing/assignments',
+    '/api/work-items/missing/handoffs',
+  ])
+    await api.get(path).set('Authorization', auth).expect(404);
+});
+
 it('我的Inbox不能用请求参数冒充主体或读取未加入的项目', async () => {
   await api.get('/api/me/inbox?projectId=project_dev').expect(401);
   await get().expect(403);
