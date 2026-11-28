@@ -8,6 +8,15 @@
 
 **技术栈：** TypeScript、Zod、Nest/Fastify、Kysely/PostgreSQL、现有 RuntimeAdapter 与本机 IPC。
 
+## 完成记录
+
+- [x] 契约与只读提案生成，含坏 JSON、敏感内容、Unicode 转义实际凭证和旧问答兼容。
+- [x] 控制面原子接纳，复用两个领域服务的事务入口，包含审计、并发来源去重和失败回滚。
+- [x] 本机确认网关、CSRF、项目归属、确切 checksum 以及通用代理旁路阻断。
+- [x] OpenAPI、中文接口文档及 536 项相关测试通过；33 项无缓存构建、类型和静态检查通过；最终只读评审 `approve`。
+
+以下为实现时的验收步骤清单，实际执行证据及范围见 `docs/backend-work-proposals.md`。
+
 ## 一、契约与只读生成
 
 - [ ] 在 `packages/contracts/test/work-proposals.test.ts` 添加严格字段、长度、确认和 checksum 测试，执行 `pnpm --filter @titan/contracts exec vitest run test/work-proposals.test.ts --maxWorkers=1`，确认缺失契约红灯。
