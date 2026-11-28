@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-28T02:59:49.577Z"
+    "generatedAt": "2026-11-28T06:40:44.240Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -3710,6 +3710,1450 @@
           }
         }
       }
+    },
+    "/api/tasks/{taskId}/work-item": {
+      "post": {
+        "operationId": "createCollaborationWorkItem",
+        "summary": "createCollaborationWorkItem",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrchestrationEmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationWorkItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/members": {
+      "post": {
+        "operationId": "upsertCollaborationMember",
+        "summary": "upsertCollaborationMember",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationMemberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listCollaborationMembers",
+        "summary": "listCollaborationMembers",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollaborationMember"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/work-items/{workItemId}": {
+      "get": {
+        "operationId": "getCollaborationWorkItem",
+        "summary": "getCollaborationWorkItem",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workItemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationWorkItemDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/work-items/{workItemId}/assignments": {
+      "post": {
+        "operationId": "createCollaborationAssignment",
+        "summary": "createCollaborationAssignment",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workItemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      },
+      "get": {
+        "operationId": "listCollaborationAssignments",
+        "summary": "listCollaborationAssignments",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workItemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollaborationAssignment"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/assignments/{id}/accept": {
+      "post": {
+        "operationId": "acceptCollaborationAssignment",
+        "summary": "acceptCollaborationAssignment",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/assignments/{id}/decline": {
+      "post": {
+        "operationId": "declineCollaborationAssignment",
+        "summary": "declineCollaborationAssignment",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/assignments/{id}/complete": {
+      "post": {
+        "operationId": "completeCollaborationAssignment",
+        "summary": "completeCollaborationAssignment",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/review-requests": {
+      "post": {
+        "operationId": "createCollaborationReview",
+        "summary": "createCollaborationReview",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/projects/{projectId}/review-requests": {
+      "get": {
+        "operationId": "listCollaborationReviews",
+        "summary": "listCollaborationReviews",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollaborationReview"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/review-requests/{id}/approve": {
+      "post": {
+        "operationId": "approveCollaborationReview",
+        "summary": "approveCollaborationReview",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationReviewDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/review-requests/{id}/request-changes": {
+      "post": {
+        "operationId": "request-changesCollaborationReview",
+        "summary": "request-changesCollaborationReview",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationReviewDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/review-requests/{id}/cancel": {
+      "post": {
+        "operationId": "cancelCollaborationReview",
+        "summary": "cancelCollaborationReview",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationReviewDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/assignments/{id}/handoffs": {
+      "post": {
+        "operationId": "createResponsibilityHandoff",
+        "summary": "createResponsibilityHandoff",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationHandoffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationHandoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-idempotency-required": true
+      }
+    },
+    "/api/work-items/{id}/handoffs": {
+      "get": {
+        "operationId": "listResponsibilityHandoffs",
+        "summary": "listResponsibilityHandoffs",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollaborationHandoff"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/handoffs/{id}/accept": {
+      "post": {
+        "operationId": "acceptResponsibilityHandoff",
+        "summary": "acceptResponsibilityHandoff",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationHandoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/handoffs/{id}/decline": {
+      "post": {
+        "operationId": "declineResponsibilityHandoff",
+        "summary": "declineResponsibilityHandoff",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationHandoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/me/inbox": {
+      "get": {
+        "operationId": "getCollaborationInbox",
+        "summary": "getCollaborationInbox",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "read",
+                "resolved",
+                "dismissed"
+              ],
+              "default": "pending"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollaborationInboxListItem"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/read": {
+      "post": {
+        "operationId": "readCollaborationInbox",
+        "summary": "readCollaborationInbox",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationInbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/resolve": {
+      "post": {
+        "operationId": "resolveCollaborationInbox",
+        "summary": "resolveCollaborationInbox",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationInbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/dismiss": {
+      "post": {
+        "operationId": "dismissCollaborationInbox",
+        "summary": "dismissCollaborationInbox",
+        "description": "本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollaborationVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "持久化协作事实；camelCase字段，空时间/引用为null。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollaborationInbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5075,7 +6519,15 @@
               "SCHEDULE_MAX_RUNS_REACHED",
               "SCHEDULE_OVERLAP",
               "SCHEDULE_OUTSIDE_WINDOW",
-              "SCHEDULE_CATCHUP_SKIPPED"
+              "SCHEDULE_CATCHUP_SKIPPED",
+              "COLLABORATION_NOT_FOUND",
+              "COLLABORATION_VERSION_CONFLICT",
+              "COLLABORATION_PERMISSION_DENIED",
+              "COLLABORATION_INVALID_STATE",
+              "COLLABORATION_DUPLICATE",
+              "COLLABORATION_ASSIGNMENT_REQUIRED",
+              "COLLABORATION_REVIEW_REQUIRED",
+              "COLLABORATION_HANDOFF_CONFLICT"
             ]
           },
           "projectId": {
@@ -5218,7 +6670,15 @@
               "SCHEDULE_MAX_RUNS_REACHED",
               "SCHEDULE_OVERLAP",
               "SCHEDULE_OUTSIDE_WINDOW",
-              "SCHEDULE_CATCHUP_SKIPPED"
+              "SCHEDULE_CATCHUP_SKIPPED",
+              "COLLABORATION_NOT_FOUND",
+              "COLLABORATION_VERSION_CONFLICT",
+              "COLLABORATION_PERMISSION_DENIED",
+              "COLLABORATION_INVALID_STATE",
+              "COLLABORATION_DUPLICATE",
+              "COLLABORATION_ASSIGNMENT_REQUIRED",
+              "COLLABORATION_REVIEW_REQUIRED",
+              "COLLABORATION_HANDOFF_CONFLICT"
             ]
           }
         },
@@ -5769,7 +7229,15 @@
               "SCHEDULE_MAX_RUNS_REACHED",
               "SCHEDULE_OVERLAP",
               "SCHEDULE_OUTSIDE_WINDOW",
-              "SCHEDULE_CATCHUP_SKIPPED"
+              "SCHEDULE_CATCHUP_SKIPPED",
+              "COLLABORATION_NOT_FOUND",
+              "COLLABORATION_VERSION_CONFLICT",
+              "COLLABORATION_PERMISSION_DENIED",
+              "COLLABORATION_INVALID_STATE",
+              "COLLABORATION_DUPLICATE",
+              "COLLABORATION_ASSIGNMENT_REQUIRED",
+              "COLLABORATION_REVIEW_REQUIRED",
+              "COLLABORATION_HANDOFF_CONFLICT"
             ]
           }
         },
@@ -5837,7 +7305,15 @@
               "SCHEDULE_MAX_RUNS_REACHED",
               "SCHEDULE_OVERLAP",
               "SCHEDULE_OUTSIDE_WINDOW",
-              "SCHEDULE_CATCHUP_SKIPPED"
+              "SCHEDULE_CATCHUP_SKIPPED",
+              "COLLABORATION_NOT_FOUND",
+              "COLLABORATION_VERSION_CONFLICT",
+              "COLLABORATION_PERMISSION_DENIED",
+              "COLLABORATION_INVALID_STATE",
+              "COLLABORATION_DUPLICATE",
+              "COLLABORATION_ASSIGNMENT_REQUIRED",
+              "COLLABORATION_REVIEW_REQUIRED",
+              "COLLABORATION_HANDOFF_CONFLICT"
             ]
           }
         },
@@ -5976,6 +7452,1226 @@
           "proposalChecksum",
           "proposal",
           "confirmed"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationMemberRequest": {
+        "type": "object",
+        "properties": {
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "manager",
+              "developer",
+              "reviewer",
+              "observer"
+            ]
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "subjectType",
+          "subjectId",
+          "role"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationAssignmentRequest": {
+        "type": "object",
+        "properties": {
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "responsibility": {
+            "type": "string",
+            "enum": [
+              "human-owner",
+              "agent-owner",
+              "reviewer",
+              "observer"
+            ]
+          },
+          "reviewers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            },
+            "maxItems": 20
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "subjectType",
+          "subjectId",
+          "responsibility",
+          "reviewers"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationReviewRequest": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "targetType": {
+            "type": "string",
+            "enum": [
+              "task",
+              "artifact",
+              "run",
+              "work-item"
+            ]
+          },
+          "targetId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "reviewerSubject": {
+            "type": "object",
+            "properties": {
+              "subjectType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "subjectId": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              }
+            },
+            "required": [
+              "subjectType",
+              "subjectId"
+            ],
+            "additionalProperties": false
+          },
+          "gate": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "implement",
+              "verify",
+              "review",
+              "release"
+            ]
+          },
+          "requiredDecision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "changes_requested"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "serial",
+              "parallel"
+            ],
+            "default": "serial"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "projectId",
+          "targetType",
+          "targetId",
+          "reviewerSubject",
+          "gate",
+          "requiredDecision"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationHandoffRequest": {
+        "type": "object",
+        "properties": {
+          "toSubject": {
+            "type": "object",
+            "properties": {
+              "subjectType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "subjectId": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              }
+            },
+            "required": [
+              "subjectType",
+              "subjectId"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "contextArtifactId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "openQuestions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "maxItems": 50
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "maxItems": 50
+          },
+          "nextActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "maxItems": 50
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "toSubject",
+          "reason",
+          "openQuestions",
+          "risks",
+          "nextActions"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationVersionRequest": {
+        "type": "object",
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationReviewDecision": {
+        "type": "object",
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "reason": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "manager",
+              "developer",
+              "reviewer",
+              "observer"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "invited",
+              "active",
+              "suspended",
+              "removed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "subjectType",
+          "subjectId",
+          "role",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationAssignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workItemId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "responsibility": {
+            "type": "string",
+            "enum": [
+              "human-owner",
+              "agent-owner",
+              "reviewer",
+              "observer"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "accepted",
+              "declined",
+              "completed",
+              "superseded"
+            ]
+          },
+          "reviewers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            },
+            "maxItems": 20
+          },
+          "dueAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "workItemId",
+          "subjectType",
+          "subjectId",
+          "responsibility",
+          "status",
+          "reviewers",
+          "dueAt"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationWorkItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "taskId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "ready",
+              "in_progress",
+              "blocked",
+              "review",
+              "completed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "taskId",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationWorkItemDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "taskId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "ready",
+              "in_progress",
+              "blocked",
+              "review",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                },
+                "projectId": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483646
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "workItemId": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                },
+                "subjectType": {
+                  "type": "string",
+                  "enum": [
+                    "human",
+                    "agent"
+                  ]
+                },
+                "subjectId": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                },
+                "responsibility": {
+                  "type": "string",
+                  "enum": [
+                    "human-owner",
+                    "agent-owner",
+                    "reviewer",
+                    "observer"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "active",
+                    "accepted",
+                    "declined",
+                    "completed",
+                    "superseded"
+                  ]
+                },
+                "reviewers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "x-trim": true,
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                  },
+                  "maxItems": 20
+                },
+                "dueAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "version",
+                "createdAt",
+                "workItemId",
+                "subjectType",
+                "subjectId",
+                "responsibility",
+                "status",
+                "reviewers",
+                "dueAt"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "taskId",
+          "status",
+          "assignments"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationReview": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targetType": {
+            "type": "string",
+            "enum": [
+              "task",
+              "artifact",
+              "run",
+              "work-item"
+            ]
+          },
+          "targetId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "reviewerType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "reviewerId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "gate": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "research",
+              "design",
+              "structure",
+              "plan",
+              "implement",
+              "verify",
+              "review",
+              "release"
+            ]
+          },
+          "requiredDecision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "changes_requested"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "serial",
+              "parallel"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "changes_requested",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "dueAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolutionReason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "predecessorId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "targetType",
+          "targetId",
+          "reviewerType",
+          "reviewerId",
+          "gate",
+          "requiredDecision",
+          "mode",
+          "status",
+          "dueAt",
+          "resolvedAt",
+          "resolutionReason",
+          "targetVersion",
+          "predecessorId"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationHandoff": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workItemId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "fromAssignmentId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "toSubjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "toSubjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "contextArtifactId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "openQuestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50
+          },
+          "nextActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_acceptance",
+              "accepted",
+              "declined",
+              "cancelled"
+            ]
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "newAssignmentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "workItemId",
+          "fromAssignmentId",
+          "toSubjectType",
+          "toSubjectId",
+          "reason",
+          "contextArtifactId",
+          "openQuestions",
+          "risks",
+          "nextActions",
+          "status",
+          "resolvedAt",
+          "newAssignmentId"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationInbox": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "assignment",
+              "review",
+              "handoff",
+              "approval",
+              "blocked"
+            ]
+          },
+          "sourceId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "read",
+              "resolved",
+              "dismissed"
+            ]
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "subjectType",
+          "subjectId",
+          "kind",
+          "sourceId",
+          "status",
+          "resolvedAt"
+        ],
+        "additionalProperties": false
+      },
+      "CollaborationInboxListItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "projectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "subjectType": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent"
+            ]
+          },
+          "subjectId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "assignment",
+              "review",
+              "handoff",
+              "approval",
+              "blocked"
+            ]
+          },
+          "sourceId": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "read",
+              "resolved",
+              "dismissed"
+            ]
+          },
+          "resolvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "version",
+          "createdAt",
+          "subjectType",
+          "subjectId",
+          "kind",
+          "sourceId",
+          "status",
+          "resolvedAt",
+          "title"
         ],
         "additionalProperties": false
       },
@@ -6693,6 +9389,14 @@
               "SCHEDULE_OVERLAP",
               "SCHEDULE_OUTSIDE_WINDOW",
               "SCHEDULE_CATCHUP_SKIPPED",
+              "COLLABORATION_NOT_FOUND",
+              "COLLABORATION_VERSION_CONFLICT",
+              "COLLABORATION_PERMISSION_DENIED",
+              "COLLABORATION_INVALID_STATE",
+              "COLLABORATION_DUPLICATE",
+              "COLLABORATION_ASSIGNMENT_REQUIRED",
+              "COLLABORATION_REVIEW_REQUIRED",
+              "COLLABORATION_HANDOFF_CONFLICT",
               "INTERNAL_ERROR"
             ]
           },

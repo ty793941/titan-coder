@@ -224,7 +224,20 @@ export interface Database {
   execution_schedule: ExecutionScheduleTable;
   workflow_command: WorkflowCommandTable;
   schedule_occurrence: ScheduleOccurrenceTable;
+  project_member: ProjectMemberTable;
+  work_item: WorkItemTable;
+  assignment: AssignmentTable;
+  review_request: ReviewRequestTable;
+  handoff: HandoffTable;
+  collaboration_inbox_item: CollaborationInboxItemTable;
 }
+
+export interface ProjectMemberTable { id: string; project_id: string; subject_type: string; subject_id: string; role: string; status: string; version: Generated<number>; created_at: Generated<Date>; }
+export interface WorkItemTable { id: string; project_id: string; task_id: string; status: Generated<string>; version: Generated<number>; created_at: Generated<Date>; }
+export interface AssignmentTable { id: string; project_id: string; work_item_id: string; subject_type: string; subject_id: string; responsibility: string; status: Generated<string>; reviewers: Generated<JsonValue>; due_at: Date | null; version: Generated<number>; created_at: Generated<Date>; }
+export interface ReviewRequestTable { id: string; project_id: string; target_type: string; target_id: string; reviewer_type: string; reviewer_id: string; gate: string; required_decision: string; mode: Generated<string>; status: Generated<string>; due_at: Date | null; version: Generated<number>; created_at: Generated<Date>; resolved_at: Date | null; resolution_reason: Generated<string | null>; target_version: number; predecessor_id: string | null; }
+export interface HandoffTable { id: string; project_id: string; work_item_id: string; from_assignment_id: string; to_subject_type: string; to_subject_id: string; reason: string; context_artifact_id: string | null; open_questions: Generated<JsonValue>; risks: Generated<JsonValue>; next_actions: Generated<JsonValue>; status: Generated<string>; version: Generated<number>; created_at: Generated<Date>; resolved_at: Date | null; new_assignment_id: Generated<string | null>; }
+export interface CollaborationInboxItemTable { id: string; project_id: string; subject_type: string; subject_id: string; kind: string; source_id: string; status: Generated<string>; version: Generated<number>; created_at: Generated<Date>; resolved_at: Date | null; }
 
 export interface BackgroundJobTable {
   id: string; project_id: string; task_id: string; session_id: string; run_id: string | null;

@@ -32,7 +32,7 @@ function controllerRoutes() {
         status: /@HttpCode\((\d+)\)/.exec(body)?.[1] ?? (method === 'Post' ? '201' : '200'),
         security: body.includes('this.daemons.authenticate(') ? [{ DaemonBearer: [] }]
           : body.includes('this.workflowAuth.authenticate(') ? [{ WorkflowBearer: [] }]
-          : body.includes('authenticateConsole(') ? [{ ConsoleBearer: [] }] : [],
+          : body.includes('authenticateConsole(') || source.includes('@UseGuards(CollaborationConsoleGuard)') ? [{ ConsoleBearer: [] }] : [],
       };
     });
     });

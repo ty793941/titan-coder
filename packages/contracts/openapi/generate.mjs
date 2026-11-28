@@ -3,12 +3,14 @@ import { z } from 'zod';
 import * as source from '../dist/schemas.js';
 import * as orchestration from '../dist/orchestration.js';
 import * as proposals from '../dist/work-proposals.js';
+import * as collaboration from '../dist/collaboration.js';
 import { errorCodes } from '../dist/errors.js';
 
 // 仅用于离线协议工件生成，不注册运行时路由；新增 Zod 类型必须显式支持。
 function jsonSchema(schema) {
   const def = schema._def;
   switch (def.typeName) {
+    case 'ZodNullable': return { anyOf: [jsonSchema(def.innerType), { type: 'null' }] };
     case 'ZodOptional': return jsonSchema(def.innerType);
     case 'ZodDefault': return { ...jsonSchema(def.innerType), default: def.defaultValue() };
     case 'ZodEffects': return jsonSchema(def.schema);
@@ -110,6 +112,20 @@ const schemas = Object.fromEntries(Object.entries({
   OrchestrationEmptyRequest: orchestration.orchestrationEmptyRequestSchema,
   WorkProposal: proposals.workProposalSchema,
   WorkProposalAcceptRequest: proposals.workProposalAcceptRequestSchema,
+  CollaborationMemberRequest: collaboration.collaborationMemberRequestSchema,
+  CollaborationAssignmentRequest: collaboration.assignmentCreateRequestSchema,
+  CollaborationReviewRequest: collaboration.reviewRequestCreateSchema,
+  CollaborationHandoffRequest: collaboration.collaborationHandoffCreateRequestSchema,
+  CollaborationVersionRequest: collaboration.collaborationVersionRequestSchema,
+  CollaborationReviewDecision: collaboration.collaborationReviewDecisionSchema,
+  CollaborationMember: collaboration.collaborationMemberSchema,
+  CollaborationAssignment: collaboration.collaborationAssignmentSchema,
+  CollaborationWorkItem: collaboration.collaborationWorkItemSchema,
+  CollaborationWorkItemDetail: collaboration.collaborationWorkItemDetailSchema,
+  CollaborationReview: collaboration.collaborationReviewSchema,
+  CollaborationHandoff: collaboration.collaborationHandoffSchema,
+  CollaborationInbox: collaboration.collaborationInboxSchema,
+  CollaborationInboxListItem: collaboration.collaborationInboxListItemSchema,
 }).map(([key, value]) => [key, jsonSchema(value)]));
 
 schemas.SessionCreateRequest.properties.execution = ref('ExecutionConfig');
@@ -359,6 +375,37 @@ paths['/api/internal/workflow/commands/{id}/retry'].post.description += ' start_
 paths['/api/background-jobs/{id}'].get.description += ' 到deadline时即使无Run、无Temporal也持久expired、取消意图及cancel_job命令；重复GET不重复事件。';
 paths['/api/internal/workflow/jobs/{id}'].get.description += ' 授权后到期检查与Console GET一致。';
 schemas.Schedule.description += ' run_count达到maxRuns的同一派发事务禁用Schedule、version加一并enqueue sync_schedule停止未来触发，不取消本次Run；Temporal不得以触发次数替代实际Run计数。';
+
+// 协作管理接口只信任Console，不提供基于客户端主体ID的成员身份模拟。
+function collaborationOperation(method, path, name, body, output, list = false, parameters = []) {
+  operation(method, path, name, name, {
+    auth: 'console', ...(body ? { body } : {}), parameters,
+    description: '本机可信Console协作管理，固定操作者local-user。成员引用不等于登录或角色授权，禁止请求自报actor。个人接受/拒绝/评审及我的Inbox仅允许local-user且须为项目active成员；其他主体需要未来独立身份接入。修改不自动推进任务、批准Artifact或启动Run。创建分配/评审/交接必须提供Idempotency-Key或正文idempotencyKey；状态修改使用expectedVersion，完全相同的上一版本重试返回当前结果。所有写入、事件、Outbox及审计处于同一事务。',
+    responses: { [method === 'get' || path.match(/\/(accept|decline|complete|approve|request-changes|cancel|read|resolve|dismiss)$/) ? '200' : '201']: response('持久化协作事实；camelCase字段，空时间/引用为null。', list ? array(ref(output)) : ref(output)) },
+  });
+}
+collaborationOperation('post', '/api/tasks/{taskId}/work-item', 'createCollaborationWorkItem', 'OrchestrationEmptyRequest', 'CollaborationWorkItem');
+collaborationOperation('post', '/api/projects/{projectId}/members', 'upsertCollaborationMember', 'CollaborationMemberRequest', 'CollaborationMember');
+collaborationOperation('get', '/api/projects/{projectId}/members', 'listCollaborationMembers', null, 'CollaborationMember', true);
+collaborationOperation('get', '/api/work-items/{workItemId}', 'getCollaborationWorkItem', null, 'CollaborationWorkItemDetail');
+collaborationOperation('post', '/api/work-items/{workItemId}/assignments', 'createCollaborationAssignment', 'CollaborationAssignmentRequest', 'CollaborationAssignment');
+collaborationOperation('get', '/api/work-items/{workItemId}/assignments', 'listCollaborationAssignments', null, 'CollaborationAssignment', true);
+for (const action of ['accept', 'decline', 'complete']) collaborationOperation('post', `/api/assignments/{id}/${action}`, `${action}CollaborationAssignment`, 'CollaborationVersionRequest', 'CollaborationAssignment');
+collaborationOperation('post', '/api/review-requests', 'createCollaborationReview', 'CollaborationReviewRequest', 'CollaborationReview');
+collaborationOperation('get', '/api/projects/{projectId}/review-requests', 'listCollaborationReviews', null, 'CollaborationReview', true);
+for (const action of ['approve', 'request-changes', 'cancel']) collaborationOperation('post', `/api/review-requests/{id}/${action}`, `${action}CollaborationReview`, 'CollaborationReviewDecision', 'CollaborationReview');
+collaborationOperation('post', '/api/assignments/{id}/handoffs', 'createResponsibilityHandoff', 'CollaborationHandoffRequest', 'CollaborationHandoff');
+collaborationOperation('get', '/api/work-items/{id}/handoffs', 'listResponsibilityHandoffs', null, 'CollaborationHandoff', true);
+for (const action of ['accept', 'decline']) collaborationOperation('post', `/api/handoffs/{id}/${action}`, `${action}ResponsibilityHandoff`, 'CollaborationVersionRequest', 'CollaborationHandoff');
+collaborationOperation('get', '/api/me/inbox', 'getCollaborationInbox', null, 'CollaborationInboxListItem', true, [
+  { name: 'projectId', in: 'query', required: true, schema: id },
+  { name: 'status', in: 'query', required: false, schema: { type: 'string', enum: ['pending', 'read', 'resolved', 'dismissed'], default: 'pending' } }, ...pageParameters,
+]);
+for (const action of ['read', 'resolve', 'dismiss']) collaborationOperation('post', `/api/inbox/{id}/${action}`, `${action}CollaborationInbox`, 'CollaborationVersionRequest', 'CollaborationInbox');
+for (const path of ['/api/work-items/{workItemId}/assignments', '/api/review-requests', '/api/assignments/{id}/handoffs']) {
+  paths[path].post.parameters.push({ $ref: '#/components/parameters/IdempotencyKey' });
+  paths[path].post['x-idempotency-required'] = true;
+}
 
 const api = {
   openapi: '3.1.0', jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',

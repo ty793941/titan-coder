@@ -24,6 +24,9 @@ export class HttpErrorFilter implements ExceptionFilter {
   }
 
   private statusFor(code: string): number {
+    if (code === 'COLLABORATION_NOT_FOUND') return 404;
+    if (code === 'COLLABORATION_PERMISSION_DENIED') return 403;
+    if (code.startsWith('COLLABORATION_')) return 409;
     if (code === 'RESOURCE_NOT_FOUND') return 404;
     if (code === 'PERMISSION_DENIED') return 403;
     if (code === 'WORKFLOW_COMMAND_LEASE_EXPIRED') return 409;

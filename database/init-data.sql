@@ -28,3 +28,5 @@ ON CONFLICT (id) DO NOTHING;
 -- 后台任务、调度、触发和 Workflow 命令仅由授权事务创建，不种入启用定义或服务凭证。
 -- 已有资源保持未绑定，直到独立 Workflow 身份在领取命令的同一事务中绑定。
 -- worker_id 的旧表幂等升级由 schema.sql 的 ALTER TABLE 维护，不回填身份或创建伪任务。
+-- 协作成员、工作项、分配、评审、交接和Inbox仅由可信Console事务创建，不初始化成员身份或模拟责任。
+-- 协作身份引用不是登录凭证；local-user是本机Console固定操作者，不从请求参数模拟其他成员。

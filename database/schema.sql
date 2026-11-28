@@ -448,6 +448,13 @@ CREATE TABLE IF NOT EXISTS collaboration_inbox_item (
   resolved_at TIMESTAMPTZ,
   UNIQUE (subject_type, subject_id, kind, source_id)
 );
+ALTER TABLE collaboration_inbox_item ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_request ADD COLUMN IF NOT EXISTS resolution_reason TEXT;
+ALTER TABLE review_request ADD COLUMN IF NOT EXISTS target_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_request ADD COLUMN IF NOT EXISTS predecessor_id TEXT REFERENCES review_request(id);
+ALTER TABLE handoff ADD COLUMN IF NOT EXISTS new_assignment_id TEXT REFERENCES assignment(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_pending ON review_request(project_id, target_type, target_id, reviewer_type, reviewer_id, gate) WHERE status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_handoff_pending ON handoff(from_assignment_id) WHERE status = 'pending_acceptance';
 CREATE INDEX IF NOT EXISTS idx_project_member_project_status ON project_member(project_id, status, subject_type, subject_id);
 CREATE INDEX IF NOT EXISTS idx_work_item_project_status ON work_item(project_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_assignment_work_item_status ON assignment(work_item_id, status, created_at);
