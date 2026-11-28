@@ -5,3 +5,4 @@ export * from './schemas.js';
 export * from './orchestration.js';
 export * from './conversation.js';
 export * from './work-proposals.js';
+export * from './collaboration.js';

@@ -368,3 +368,89 @@ CREATE TABLE IF NOT EXISTS schedule_occurrence (
 CREATE INDEX IF NOT EXISTS idx_background_job_session ON background_job(session_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_schedule_session ON execution_schedule(session_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_workflow_command_pending ON workflow_command(status, next_attempt_at, created_at);
+
+CREATE TABLE IF NOT EXISTS project_member (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('human', 'agent')),
+  subject_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'developer', 'reviewer', 'observer')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('invited', 'active', 'suspended', 'removed')),
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, subject_type, subject_id)
+);
+CREATE TABLE IF NOT EXISTS work_item (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  task_id TEXT NOT NULL UNIQUE REFERENCES task(id),
+  status TEXT NOT NULL DEFAULT 'backlog' CHECK (status IN ('backlog', 'ready', 'in_progress', 'blocked', 'review', 'completed', 'cancelled')),
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS assignment (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  work_item_id TEXT NOT NULL REFERENCES work_item(id),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('human', 'agent')),
+  subject_id TEXT NOT NULL,
+  responsibility TEXT NOT NULL CHECK (responsibility IN ('human-owner', 'agent-owner', 'reviewer', 'observer')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active', 'accepted', 'declined', 'completed', 'superseded')),
+  reviewers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  due_at TIMESTAMPTZ,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assignment_active_human_owner ON assignment(work_item_id) WHERE responsibility = 'human-owner' AND status IN ('pending', 'active', 'accepted');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assignment_active_agent_owner ON assignment(work_item_id) WHERE responsibility = 'agent-owner' AND status IN ('pending', 'active', 'accepted');
+CREATE TABLE IF NOT EXISTS review_request (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  target_type TEXT NOT NULL CHECK (target_type IN ('task', 'artifact', 'run', 'work-item')),
+  target_id TEXT NOT NULL,
+  reviewer_type TEXT NOT NULL CHECK (reviewer_type IN ('human', 'agent')),
+  reviewer_id TEXT NOT NULL,
+  gate TEXT NOT NULL,
+  required_decision TEXT NOT NULL CHECK (required_decision IN ('approve', 'changes_requested')),
+  mode TEXT NOT NULL DEFAULT 'serial' CHECK (mode IN ('serial', 'parallel', 'conditional')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'changes_requested', 'cancelled', 'expired')),
+  due_at TIMESTAMPTZ,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS handoff (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  work_item_id TEXT NOT NULL REFERENCES work_item(id),
+  from_assignment_id TEXT NOT NULL REFERENCES assignment(id),
+  to_subject_type TEXT NOT NULL CHECK (to_subject_type IN ('human', 'agent')),
+  to_subject_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  context_artifact_id TEXT REFERENCES artifact(artifact_id),
+  open_questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  risks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  next_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending_acceptance' CHECK (status IN ('pending_acceptance', 'accepted', 'declined', 'cancelled')),
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS collaboration_inbox_item (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(id),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('human', 'agent')),
+  subject_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('assignment', 'review', 'handoff', 'approval', 'blocked')),
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'read', 'resolved', 'dismissed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (subject_type, subject_id, kind, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_member_project_status ON project_member(project_id, status, subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS idx_work_item_project_status ON work_item(project_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_assignment_work_item_status ON assignment(work_item_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_review_project_status ON review_request(project_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_handoff_work_item_status ON handoff(work_item_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_collaboration_inbox_subject ON collaboration_inbox_item(subject_type, subject_id, status, created_at);
