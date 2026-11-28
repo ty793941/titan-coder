@@ -8,6 +8,8 @@ import { artifactSchema, artifactTypeSchema, DomainError } from '@titan/contract
 import { createArtifactVersion } from '@titan/domain';
 import type { Artifact } from '@titan/domain';
 import { DatabaseService } from '../../database/database.service.js';
+import type { Database } from '../../database/types.js';
+import type { Transaction } from 'kysely';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
 import { qrspiArtifactStages } from '../tasks/qrspi-gate.js';
@@ -31,9 +33,12 @@ export class ArtifactsService {
   ) {}
 
   async create(taskId: string, input: unknown, idempotencyKey: string): Promise<Artifact> {
+    return this.database.db.transaction().execute(trx => this.createInTransaction(trx, taskId, input, idempotencyKey));
+  }
+
+  async createInTransaction(trx: Transaction<Database>, taskId: string, input: unknown, idempotencyKey: string): Promise<Artifact> {
     const parsed = artifactInputSchema.parse(input);
     const { type } = parsed;
-    return this.database.db.transaction().execute(async trx => {
       const task = await trx.selectFrom('task').select(['id', 'project_id']).where('id', '=', taskId).forUpdate().executeTakeFirst();
       if (!task) throw new DomainError('RESOURCE_NOT_FOUND', `task ${taskId} was not found`);
       const existing = await this.idempotency.read<Artifact>(trx, `task:${taskId}:artifact:create`, idempotencyKey, parsed);
@@ -78,7 +83,6 @@ export class ArtifactsService {
       });
       await this.idempotency.write(trx, `task:${taskId}:artifact:create`, idempotencyKey, parsed, versioned as unknown as Record<string, unknown>, 201);
       return versioned;
-    });
   }
 
   async approve(artifactId: string): Promise<Artifact> {

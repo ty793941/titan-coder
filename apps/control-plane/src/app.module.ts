@@ -28,10 +28,12 @@ import { WorkflowCommandsService } from './modules/orchestration/workflow-comman
 import { SchedulesService } from './modules/orchestration/schedules.service.js';
 import { OrchestrationController } from './modules/orchestration/orchestration.controller.js';
 import { WorkflowInternalController } from './modules/orchestration/workflow-internal.controller.js';
+import { WorkProposalsController } from './modules/work-proposals/work-proposals.controller.js';
+import { WorkProposalsService } from './modules/work-proposals/work-proposals.service.js';
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController, OrchestrationController, WorkflowInternalController],
-  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService, WorkflowAuth, BackgroundJobsService, WorkflowCommandsService, SchedulesService],
+  controllers: [ProjectsController, TasksController, SessionsController, RunsController, EventsController, ArtifactsController, DaemonsController, ConsoleController, HandoffsController, CloudExecutionsController, OrchestrationController, WorkflowInternalController, WorkProposalsController],
+  providers: [IdempotencyService, EventsService, ProjectsService, TasksService, SessionsService, RunsService, ArtifactsService, DaemonsService, ExecutionService, ConsoleService, HandoffsService, CloudExecutionsService, WorkflowAuth, BackgroundJobsService, WorkflowCommandsService, SchedulesService, WorkProposalsService],
 })
 export class AppModule {}

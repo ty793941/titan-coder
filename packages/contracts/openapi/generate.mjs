@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import * as source from '../dist/schemas.js';
 import * as orchestration from '../dist/orchestration.js';
+import * as proposals from '../dist/work-proposals.js';
 import { errorCodes } from '../dist/errors.js';
 
 // 仅用于离线协议工件生成，不注册运行时路由；新增 Zod 类型必须显式支持。
@@ -26,6 +27,7 @@ function jsonSchema(schema) {
           if (check.regex.flags) result['x-pattern-flags'] = check.regex.flags;
         }
         else if (check.kind === 'url') result.format = 'uri';
+        else if (check.kind === 'uuid') result.format = 'uuid';
         else if (check.kind === 'datetime') result.format = 'date-time';
         else if (check.kind === 'trim') result['x-trim'] = true;
         else throw new Error(`Unsupported string check: ${check.kind}`);
@@ -106,9 +108,12 @@ const schemas = Object.fromEntries(Object.entries({
   WorkflowCancelRequest: orchestration.workflowCancelRequestSchema,
   WorkflowFailRequest: orchestration.workflowFailRequestSchema,
   OrchestrationEmptyRequest: orchestration.orchestrationEmptyRequestSchema,
+  WorkProposal: proposals.workProposalSchema,
+  WorkProposalAcceptRequest: proposals.workProposalAcceptRequestSchema,
 }).map(([key, value]) => [key, jsonSchema(value)]));
 
 schemas.SessionCreateRequest.properties.execution = ref('ExecutionConfig');
+schemas.WorkProposal.description = '严格业务草稿：不包含模型Prompt、工具权限、执行配置、凭证或服务URL；各文本字段应用敏感模式校验。JSON解析并按此字段顺序规范化后计算UTF-8 SHA-256。';
 schemas.SessionCreateRequest.description = 'execution 可省略；真实执行必须提供最新已批准 Plan 的 planHash。daemonId 如提供，必须与 execution.daemonId 一致。';
 schemas.RunCreateRequest.description = '供创建 Run 与恢复 paused Run 共用。checkpointId、planHash 均可省略，显式 checkpointId 必须属于同一 Session。resume 未指定 checkpointId 时选取源 Run 最新检查点，没有检查点则创建无检查点的新尝试；旧 Run 保持 paused。inputSnapshotId 当前仅被接受，不持久化、不恢复上下文。';
 schemas.ExecutionConfig.properties.credentialRef.description = '本机凭证引用；只允许引用，不允许模型 API Key 明文。';
@@ -137,6 +142,7 @@ Object.assign(schemas, {
   Project: object({ id, name: text, goal: text, createdAt: date, version: positive }),
   Task: object({ id, projectId: id, title: text, goal: text, acceptanceCriteria: array(text), priority: jsonSchema(source.prioritySchema),
     stage: jsonSchema(source.taskStageSchema), status: { type: 'string', enum: ['active', 'blocked', 'paused', 'cancelled', 'failed', 'completed'] }, version: positive, createdAt: date }),
+  WorkProposalAcceptance: object({ sourceTurnId: { type: 'string', format: 'uuid' }, proposalChecksum: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, task: ref('Task'), artifact: ref('Artifact') }),
   Session: object({ id, taskId: id, status: ref('ExecutionStatus'), entryAgent: { type: 'string', const: 'project-manager' }, planHash: id, createdAt: date, environmentType: { type: 'string', enum: ['local', 'cloud'] }, parentSessionId: id },
     ['id', 'taskId', 'status', 'entryAgent', 'createdAt']),
   Run: object({ id, sessionId: id, attempt: positive, status: ref('ExecutionStatus'), checkpointId: id, errorCode: text, createdAt: date },
@@ -232,6 +238,11 @@ const create = (path, name, body, output, description) => operation('post', path
 });
 create('/api/projects', 'Project', 'ProjectCreateRequest', 'Project', '创建本机开发项目。');
 create('/api/projects/{projectId}/tasks', 'Task', 'TaskCreateRequest', 'Task', '创建初始 questions 阶段 Task；humanOwner 当前接受但不持久化。');
+operation('post', '/api/projects/{projectId}/work-proposals/accept', 'acceptWorkProposal', '确认工作提案并原子创建任务和待审批草稿', {
+  auth: 'console', body: 'WorkProposalAcceptRequest',
+  description: 'Console Bearer且confirmed=true。规范化提案SHA-256必须与proposalChecksum一致；project行锁下以sourceTurnId固定去重，不使用客户端Idempotency-Key改变来源。相同来源同正文重复返回201及原始结果，异正文409 IDEMPOTENCY_CONFLICT。复用领域服务在同一事务创建questions/active Task及draft/pending questions工件，任何失败回滚任务、工件元数据、事件和幂等记录，不自动审批、推进或创建Run。本机网关从私有历史读取来源；本接口为可信本机客户端的显式确认，不证明模型语义正确。',
+  responses: { '201': response('新建或重放同一任务与待审批工件。', ref('WorkProposalAcceptance')) },
+});
 operation('get', '/api/tasks/{taskId}', 'getTask', '查询 Task', { responses: { '200': response('Task 业务事实。', ref('Task')) } });
 operation('get', '/api/tasks/{taskId}/events', 'listTaskEvents', '查询 Task 关联事件', { description: '返回 JSON 数组，按 occurredAt 升序；可能包含多个 Run 各自的序号，不能当成单一 SSE 游标。未知 Task 当前返回空数组。', responses: { '200': response('关联事件数组。', array(ref('EventEnvelope'))) } });
 operation('post', '/api/tasks/{taskId}/stage', 'advanceTaskStage', '推进相邻 QRSPI 阶段', { body: 'StageRequest', responses: { '200': response('更新后的 Task，version 加一。', ref('Task')) } });

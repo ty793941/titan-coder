@@ -5,6 +5,8 @@ import { DomainError, taskCreateRequestSchema } from '@titan/contracts';
 import { transitionTask } from '@titan/domain';
 import type { Task } from '@titan/domain';
 import type { TaskTable } from '../../database/types.js';
+import type { Database } from '../../database/types.js';
+import type { Transaction } from 'kysely';
 import { DatabaseService } from '../../database/database.service.js';
 import { IdempotencyService } from '../../common/idempotency.service.js';
 import { EventsService } from '../events/events.service.js';
@@ -29,11 +31,14 @@ export class TasksService {
   ) {}
 
   async create(projectId: string, input: unknown, headerKey?: string): Promise<Task> {
+    return this.database.db.transaction().execute(trx => this.createInTransaction(trx, projectId, input, headerKey));
+  }
+
+  async createInTransaction(trx: Transaction<Database>, projectId: string, input: unknown, headerKey?: string): Promise<Task> {
     const source = input as { idempotencyKey?: string };
     const parsed = taskCreateRequestSchema.parse({ ...source, idempotencyKey: headerKey ?? source.idempotencyKey });
     const key = parsed.idempotencyKey;
     if (!key) throw new DomainError('VALIDATION_FAILED', 'Idempotency-Key is required');
-    return this.database.db.transaction().execute(async trx => {
       const project = await trx.selectFrom('project').select(['id']).where('id', '=', projectId).executeTakeFirst();
       if (!project) throw new DomainError('RESOURCE_NOT_FOUND', `project ${projectId} was not found`);
       const existing = await this.idempotency.read<Task>(trx, `project:${projectId}:task:create`, key, parsed);
@@ -62,7 +67,6 @@ export class TasksService {
       });
       await this.idempotency.write(trx, `project:${projectId}:task:create`, key, parsed, task as unknown as Record<string, unknown>, 201);
       return task;
-    });
   }
 
   async get(taskId: string): Promise<Task> {

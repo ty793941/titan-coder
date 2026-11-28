@@ -17,7 +17,7 @@
     "source": "packages/contracts/src/schemas.ts; apps/control-plane/src/modules/**; apps/control-plane/src/common/http-error.filter.ts",
     "template": "packages/contracts/openapi/generate.mjs",
     "templateVersion": 3,
-    "generatedAt": "2026-11-25T08:13:54.655Z"
+    "generatedAt": "2026-11-28T02:59:49.577Z"
   },
   "x-reserved-only": [
     "ConnectRPC",
@@ -133,6 +133,72 @@
           }
         },
         "x-idempotency-required": true
+      }
+    },
+    "/api/projects/{projectId}/work-proposals/accept": {
+      "post": {
+        "operationId": "acceptWorkProposal",
+        "summary": "确认工作提案并原子创建任务和待审批草稿",
+        "description": "Console Bearer且confirmed=true。规范化提案SHA-256必须与proposalChecksum一致；project行锁下以sourceTurnId固定去重，不使用客户端Idempotency-Key改变来源。相同来源同正文重复返回201及原始结果，异正文409 IDEMPOTENCY_CONFLICT。复用领域服务在同一事务创建questions/active Task及draft/pending questions工件，任何失败回滚任务、工件元数据、事件和幂等记录，不自动审批、推进或创建Run。本机网关从私有历史读取来源；本接口为可信本机客户端的显式确认，不证明模型语义正确。",
+        "security": [
+          {
+            "ConsoleBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkProposalAcceptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新建或重放同一任务与待审批工件。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkProposalAcceptance"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/api/tasks/{taskId}": {
@@ -5786,6 +5852,133 @@
         "required": [],
         "additionalProperties": false
       },
+      "WorkProposal": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "goal": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-trim": true,
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "questions": {
+            "type": "string",
+            "x-trim": true,
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "title",
+          "goal",
+          "acceptanceCriteria",
+          "priority",
+          "questions"
+        ],
+        "additionalProperties": false,
+        "description": "严格业务草稿：不包含模型Prompt、工具权限、执行配置、凭证或服务URL；各文本字段应用敏感模式校验。JSON解析并按此字段顺序规范化后计算UTF-8 SHA-256。"
+      },
+      "WorkProposalAcceptRequest": {
+        "type": "object",
+        "properties": {
+          "sourceTurnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "proposalChecksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "proposal": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "goal": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "acceptanceCriteria": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-trim": true,
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "minItems": 1,
+                "maxItems": 20
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "questions": {
+                "type": "string",
+                "x-trim": true,
+                "minLength": 1,
+                "maxLength": 8000
+              }
+            },
+            "required": [
+              "title",
+              "goal",
+              "acceptanceCriteria",
+              "priority",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "confirmed": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "sourceTurnId",
+          "proposalChecksum",
+          "proposal",
+          "confirmed"
+        ],
+        "additionalProperties": false
+      },
       "Actor": {
         "type": "object",
         "properties": {
@@ -5935,6 +6128,32 @@
           "status",
           "version",
           "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "WorkProposalAcceptance": {
+        "type": "object",
+        "properties": {
+          "sourceTurnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "proposalChecksum": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/Artifact"
+          }
+        },
+        "required": [
+          "sourceTurnId",
+          "proposalChecksum",
+          "task",
+          "artifact"
         ],
         "additionalProperties": false
       },

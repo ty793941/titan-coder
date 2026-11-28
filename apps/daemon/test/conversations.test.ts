@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { ConversationDaemon } from "../src/conversations.js";
 
@@ -37,6 +37,45 @@ async function fixture() {
 }
 
 describe("项目对话 Daemon", () => {
+  it('取消与模型完成交错时不留下可确认的提案', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'titan-proposal-cancel-'));
+    let resolve!: (value: string) => void;
+    const service = new ConversationDaemon(directory, { credentialResolver: async () => 'offline-private-credential', execute: () => new Promise<string>(done => { resolve = done; }) });
+    try {
+      const snapshot = await service.send(context, { ...request(), mode: 'work-proposal' });
+      resolve(JSON.stringify({ title: '退款', goal: '明确目标', acceptanceCriteria: ['明确'], priority: 'medium', questions: '问题确认' }));
+      await service.cancel(context.projectId, snapshot.turns[0]!.id);
+      await vi.waitFor(async () => expect((await service.read(context.projectId)).turns[0]?.status).toBe('cancelled'));
+      expect((await service.read(context.projectId)).turns[0]?.proposal).toBeUndefined();
+    } finally { await service.close(); }
+  });
+  it("保存严格提案与checksum，重试不调用模型且重启可读取", async () => {
+    const h = await fixture();
+    const proposal = { title: '退款进度', goal: '客户了解进度', acceptanceCriteria: ['可查询状态'], priority: 'medium', questions: '# 问题确认\n退款需要可追溯。' };
+    h.execute.mockResolvedValue(JSON.stringify(proposal));
+    const input = { ...request(), mode: 'work-proposal' };
+    try {
+      await h.service.send(context, input);
+      await vi.waitFor(async () => expect((await h.service.read(context.projectId)).turns[0]?.status).toBe('completed'));
+      const turn = (await h.service.read(context.projectId)).turns[0]!;
+      expect(turn.proposal).toEqual(proposal);
+      expect(turn.proposalChecksum).toBe(`sha256:${createHash('sha256').update(JSON.stringify(proposal)).digest('hex')}`);
+      await h.service.send(context, input);
+      expect(h.execute).toHaveBeenCalledTimes(1);
+      expect((await new ConversationDaemon(h.directory).read(context.projectId)).turns[0]?.proposal).toEqual(proposal);
+    } finally { await h.service.close(); }
+  });
+  it.each(['not-json', JSON.stringify({ title: '目标', allowedTools: ['workspace.write'] }), JSON.stringify({ title: '退款', goal: 'api_key=synthetic-unsafe-token', acceptanceCriteria: ['完成'], priority: 'medium', questions: '内容' })])('非法提案不作为成功回复保存：%s', async (reply) => {
+    const h = await fixture(); h.execute.mockResolvedValue(reply);
+    try {
+      await h.service.send(context, { ...request(), mode: 'work-proposal' });
+      await vi.waitFor(async () => expect((await h.service.read(context.projectId)).turns[0]?.status).toBe('failed'));
+      const turn = (await h.service.read(context.projectId)).turns[0]!;
+      expect(turn.errorCode).toBe('CONVERSATION_PROPOSAL_INVALID');
+      expect(turn.proposal).toBeUndefined();
+      expect(turn.reply).toBeUndefined();
+    } finally { await h.service.close(); }
+  });
   it("IPC接收时已过期的发送不启动模型", async () => {
     const h = await fixture();
     await expect(

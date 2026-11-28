@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { workProposalSchema, proposalChecksumSchema } from "./work-proposals.js";
 
 export const conversationProjectIdSchema = z
   .string()
@@ -8,6 +9,7 @@ export const conversationRequestSchema = z
     requestId: z.string().uuid(),
     text: z.string().trim().min(1).max(4000),
     provider: z.enum(["codex", "qwen"]),
+    mode: z.literal("work-proposal").optional(),
     modelRef: z
       .string()
       .trim()
@@ -46,12 +48,16 @@ export const conversationTurnSchema = z
     modelRef: z.string().max(120).optional(),
     status: z.enum(["running", "completed", "failed", "cancelled"]),
     reply: z.string().max(16000).optional(),
+    mode: z.literal("work-proposal").optional(),
+    proposal: workProposalSchema.optional(),
+    proposalChecksum: proposalChecksumSchema.optional(),
     errorCode: z
       .enum([
         "CONVERSATION_FAILED",
         "CONVERSATION_TIMEOUT",
         "CONVERSATION_INTERRUPTED",
         "CONVERSATION_READ_ONLY",
+        "CONVERSATION_PROPOSAL_INVALID",
       ])
       .optional(),
     createdAt: z.string().datetime(),

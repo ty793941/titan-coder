@@ -2,13 +2,13 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGateway } from "../server/gateway.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanup.length) await cleanup.pop()!();
 });
-async function fixture() {
+async function fixture(turns: unknown[] = []) {
   const conversations = {
     request: vi.fn(
       async (
@@ -16,12 +16,20 @@ async function fixture() {
         projectId: string,
         _input?: unknown,
         _context?: unknown,
-      ) => ({ projectId, turns: [] }),
+      ) => ({ projectId, turns }),
     ),
     close: vi.fn(async () => {}),
   };
-  const cp = createServer((_req, res) => {
+  const accepted: unknown[] = [];
+  const cp = createServer(async (req, res) => {
     res.setHeader("content-type", "application/json");
+    if (req.url?.endsWith('/work-proposals/accept')) {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      accepted.push(JSON.parse(Buffer.concat(chunks).toString()));
+      res.statusCode = 201;
+      res.end(JSON.stringify({ sourceTurnId: (accepted.at(-1) as { sourceTurnId: string }).sourceTurnId, task: { id: 'task-created' }, artifact: { artifactId: 'artifact-created', reviewState: 'pending' } }));
+      return;
+    }
     res.end(
       JSON.stringify({
         projects: [{ id: "project-test", name: "退款项目", goal: "透明退款" }],
@@ -59,9 +67,33 @@ async function fixture() {
     cp.closeAllConnections();
     await new Promise<void>((resolve) => cp.close(() => resolve()));
   });
-  return { base, token, conversations };
+  return { base, token, conversations, accepted };
 }
 describe("本机项目经理网关", () => {
+  it('只从本项目已完成回合读取提案并确认，拒绝客户端替换正文', async () => {
+    const proposal = { title: '退款', goal: '透明退款', acceptanceCriteria: ['可查进度'], priority: 'medium', questions: '# 问题确认' };
+    const proposalChecksum = `sha256:${createHash('sha256').update(JSON.stringify(proposal)).digest('hex')}`;
+    const turnId = randomUUID();
+    const h = await fixture([{ id: turnId, status: 'completed', mode: 'work-proposal', proposal, proposalChecksum }]);
+    const send = (body: unknown, token = h.token) => fetch(`${h.base}/local-api/projects/project-test/conversation/accept`, { method: 'POST', headers: { origin: h.base, 'content-type': 'application/json', 'x-titan-csrf': token }, body: JSON.stringify(body) });
+    const input = { turnId, proposalChecksum, confirmed: true };
+    expect((await send(input)).status).toBe(201);
+    expect(h.accepted).toEqual([{ sourceTurnId: turnId, proposalChecksum, confirmed: true, proposal }]);
+    expect((await send({ ...input, proposal: { ...proposal, title: '替换' } })).status).toBe(400);
+    expect((await send({ ...input, proposalChecksum: `sha256:${'0'.repeat(64)}` })).status).toBe(409);
+    expect((await send({ ...input, turnId: randomUUID() })).status).toBe(404);
+    const crossProject = await fetch(`${h.base}/local-api/projects/project-other/conversation/accept`, { method: 'POST', headers: { origin: h.base, 'content-type': 'application/json', 'x-titan-csrf': h.token }, body: JSON.stringify(input) });
+    expect(crossProject.status).toBe(404);
+    expect((await send(input, '')).status).toBe(403);
+    expect(h.accepted).toHaveLength(1);
+  });
+  it.each(['running', 'failed', 'cancelled'])('未完成提案不能确认：%s', async status => {
+    const turnId = randomUUID();
+    const h = await fixture([{ id: turnId, status, mode: 'work-proposal' }]);
+    const result = await fetch(`${h.base}/local-api/projects/project-test/conversation/accept`, { method: 'POST', headers: { origin: h.base, 'content-type': 'application/json', 'x-titan-csrf': h.token }, body: JSON.stringify({ turnId, proposalChecksum: `sha256:${'a'.repeat(64)}`, confirmed: true }) });
+    expect(result.status).toBe(409);
+    expect(h.accepted).toHaveLength(0);
+  });
   it("只转发当前项目的有界上下文，不转发任务Prompt", async () => {
     const h = await fixture();
     const result = await fetch(

@@ -8,6 +8,7 @@ import {
   conversationProjectIdSchema,
   conversationRequestSchema,
   conversationSnapshotSchema,
+  workProposalSchema,
 } from "@titan/contracts";
 import type {
   ConversationContext,
@@ -34,6 +35,7 @@ type ActiveTurn = {
   id: string;
   controller: AbortController;
   done: Promise<void>;
+  signal?: AbortSignal;
 };
 
 export class ConversationDaemon {
@@ -225,6 +227,7 @@ export class ConversationDaemon {
           fingerprint,
           text: request.text,
           provider: request.provider,
+          ...(request.mode ? { mode: request.mode } : {}),
           ...(request.modelRef ? { modelRef: request.modelRef } : {}),
           status: "running",
           createdAt: new Date().toISOString(),
@@ -267,10 +270,12 @@ export class ConversationDaemon {
           controller.signal,
           AbortSignal.timeout(this.options.timeoutMs ?? 120000),
         ]);
+        active.signal = signal;
         active.done = this.execute(
           {
             text: request.text,
             provider: request.provider,
+            ...(request.mode ? { mode: request.mode } : {}),
             ...(request.modelRef ? { modelRef: request.modelRef } : {}),
             context: sanitizeConversation(context, secrets),
             history,
@@ -280,12 +285,20 @@ export class ConversationDaemon {
           },
           signal,
         )
-          .then((reply) =>
-            this.finish(context.projectId, turn.id, {
+          .then((reply) => {
+            if (request.mode === "work-proposal") {
+              try {
+                if (reply.length > 32000 || containsSensitive(reply, secrets) || /(?:https?|wss?):\/\//i.test(reply)) throw new Error();
+                const proposal = workProposalSchema.parse(JSON.parse(reply));
+                const proposalChecksum = `sha256:${createHash("sha256").update(JSON.stringify(proposal)).digest("hex")}`;
+                return this.finish(context.projectId, turn.id, { status: "completed", proposal, proposalChecksum, reply: `已生成工作提案：${proposal.title}。确认后创建任务与待审批问题确认草稿。` });
+              } catch { throw new Error("CONVERSATION_PROPOSAL_INVALID"); }
+            }
+            return this.finish(context.projectId, turn.id, {
               status: "completed",
               reply: sanitizeConversation(reply, secrets).slice(0, 16000),
-            }),
-          )
+            });
+          })
           .catch((error) =>
             this.finish(context.projectId, turn.id, {
               status: controller.signal.aborted ? "cancelled" : "failed",
@@ -294,7 +307,9 @@ export class ConversationDaemon {
                 : {
                     errorCode: signal.aborted
                       ? "CONVERSATION_TIMEOUT"
-                      : error instanceof Error &&
+                      : error instanceof Error && error.message === "CONVERSATION_PROPOSAL_INVALID"
+                        ? "CONVERSATION_PROPOSAL_INVALID"
+                        : error instanceof Error &&
                           error.message === "CONVERSATION_READ_ONLY"
                         ? "CONVERSATION_READ_ONLY"
                         : "CONVERSATION_FAILED",
@@ -325,13 +340,20 @@ export class ConversationDaemon {
   private async finish(
     projectId: string,
     turnId: string,
-    result: Pick<ConversationTurn, "status" | "reply" | "errorCode">,
+    result: Pick<ConversationTurn, "status" | "reply" | "errorCode" | "proposal" | "proposalChecksum">,
   ): Promise<void> {
     await this.locked(projectId, async () => {
       const snapshot = await this.load(projectId);
       const turn = snapshot.turns.find((item) => item.id === turnId);
       if (!turn || turn.status !== "running") return;
-      Object.assign(turn, result, { finishedAt: new Date().toISOString() });
+      const active = this.active.get(projectId);
+      const interrupted = active?.id === turnId && active.signal?.aborted;
+      const settled = interrupted
+        ? active.controller.signal.aborted
+          ? { status: "cancelled" as const }
+          : { status: "failed" as const, errorCode: "CONVERSATION_TIMEOUT" as const }
+        : result;
+      Object.assign(turn, settled, { finishedAt: new Date().toISOString() });
       await this.save(snapshot);
     });
   }

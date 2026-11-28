@@ -33,6 +33,13 @@ const input = {
 };
 
 describe("只读项目经理问答", () => {
+  it("工作提案模式要求严格JSON并继续禁止工具", async () => {
+    const adapter = fixture([{ type: "text", payload: '{"title":"退款目标"}' }, { type: "session.completed" }]);
+    await runConversation({ ...input, mode: "work-proposal" }, adapter as unknown as RuntimeAdapter, new AbortController().signal);
+    expect(JSON.stringify(adapter.sendInput.mock.calls)).toContain("acceptanceCriteria");
+    expect(JSON.stringify(adapter.sendInput.mock.calls)).toContain("questions");
+    expect(adapter.createSession).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }));
+  });
   it("复用原生适配器并关闭会话，回复中的凭证和URL会被去除", async () => {
     const adapter = fixture([
       {
