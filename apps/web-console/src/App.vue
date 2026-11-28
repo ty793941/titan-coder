@@ -20,6 +20,7 @@ import {
 } from "./product/routes";
 import { useProductData } from "./product/useProductData";
 import type { Artifact } from "./types";
+import type { WorkProposalAccepted } from "./api";
 
 const route = ref<ProductRoute>(parseProductRoute(window.location.hash));
 const product = useProductData();
@@ -79,6 +80,25 @@ async function created(id: string) {
       ? { name: "task", taskId: id }
       : { name: "project", projectId: id },
   );
+}
+async function proposalAccepted(_result: WorkProposalAccepted) {
+  notice.value =
+    "工作目标与问题确认草稿已保存。草稿仍需单独审批，尚未启动执行。";
+  await product.refresh();
+}
+async function openProposalTask(taskId: string) {
+  await product.refresh();
+  navigate({ name: "task", taskId });
+}
+async function openProposalReview(artifactId: string) {
+  await product.refresh();
+  const decisionId = `review_artifact:${artifactId}`;
+  if (product.decisions.value.some((item) => item.id === decisionId))
+    navigate({ name: "decision", decisionId });
+  else {
+    notice.value = "草稿审批状态可能已变化，请在交付物中查看当前版本。";
+    navigate({ name: "deliveries" });
+  }
 }
 
 const allArtifacts = () =>
@@ -236,6 +256,9 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
         :local="product.local.value"
         @settings="navigate({ name: 'settings' })"
         @close="managerOpen = false"
+        @accepted="proposalAccepted"
+        @task="openProposalTask"
+        @review="openProposalReview"
       />
     </template>
     <main

@@ -18,6 +18,37 @@ afterEach(async () => {
 });
 
 describe("console HTTP boundary", () => {
+  it("confirms the saved proposal through the local CSRF boundary using only source and checksum", async () => {
+    let received: unknown;
+    const base = await serve(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      received = {
+        path: req.url,
+        csrf: req.headers["x-titan-csrf"],
+        body: JSON.parse(Buffer.concat(chunks).toString()),
+      };
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end(
+        '{"task":{"id":"task-1"},"artifact":{"artifactId":"artifact-1"}}',
+      );
+    });
+    const input = {
+      turnId: "11111111-1111-4111-8111-111111111111",
+      proposalChecksum: `sha256:${"a".repeat(64)}`,
+      confirmed: true as const,
+    };
+    await createConsoleApi(base).acceptWorkProposal(
+      "project-1",
+      input,
+      "local-csrf",
+    );
+    expect(received).toEqual({
+      path: "/local-api/projects/project-1/conversation/accept",
+      csrf: "local-csrf",
+      body: input,
+    });
+  });
   it("does not expose server error bodies through shared execution and settings APIs", async () => {
     const base = await serve((_req, res) => {
       res.writeHead(500, { "Content-Type": "application/json" });

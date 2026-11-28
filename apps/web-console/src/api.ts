@@ -18,6 +18,13 @@ import type {
   ConversationSnapshot,
 } from "@titan/contracts";
 
+export interface WorkProposalAccepted {
+  sourceTurnId: string;
+  proposalChecksum: string;
+  task: Task;
+  artifact: Artifact;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -119,6 +126,20 @@ export function createConsoleApi(base = "") {
     );
   }
   return {
+    acceptWorkProposal: (
+      projectId: string,
+      input: { turnId: string; proposalChecksum: string; confirmed: true },
+      csrfToken: string,
+    ) =>
+      localPost<WorkProposalAccepted>(
+        `/projects/${id(projectId)}/conversation/accept`,
+        {
+          turnId: input.turnId,
+          proposalChecksum: input.proposalChecksum,
+          confirmed: input.confirmed,
+        },
+        csrfToken,
+      ),
     conversation: (projectId: string, signal?: AbortSignal) =>
       request<ConversationSnapshot>(
         `/local-api/projects/${id(projectId)}/conversation`,

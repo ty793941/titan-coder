@@ -56,7 +56,66 @@ describe("正式项目经理对话", () => {
       }),
       "local-csrf",
     );
+    expect(send.mock.calls[0]![1].mode).toBeUndefined();
     expect(wrapper.text()).toContain(turn.reply);
+    wrapper.unmount();
+  });
+  it("显式选择生成提案后才使用结构化模式，同模式重试复用ID，切换意图更换ID", async () => {
+    const send = vi
+      .spyOn(api, "sendConversation")
+      .mockRejectedValue(new ApiError(0, "NETWORK_UNAVAILABLE", "lost"));
+    const wrapper = mount(ManagerConversation, {
+      props: { projectId: "project-test", local },
+    });
+    await flushPromises();
+    await wrapper.get("#manager-mode").setValue("work-proposal");
+    await wrapper.get("textarea").setValue("为退款进度建立可验收目标");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(send.mock.calls[0]![1].mode).toBe("work-proposal");
+    expect(send.mock.calls[0]![1].requestId).toBe(
+      send.mock.calls[1]![1].requestId,
+    );
+    await wrapper.get("#manager-mode").setValue("question");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(send.mock.calls[2]![1].mode).toBeUndefined();
+    expect(send.mock.calls[2]![1].requestId).not.toBe(
+      send.mock.calls[1]![1].requestId,
+    );
+    wrapper.unmount();
+  });
+
+  it("刷新恢复的工作提案显示全文和确认入口，普通问答没有确认入口", async () => {
+    vi.spyOn(api, "conversation").mockResolvedValue({
+      projectId: "project-test",
+      turns: [
+        turn,
+        {
+          ...turn,
+          id: "33333333-3333-4333-8333-333333333333",
+          mode: "work-proposal",
+          proposalChecksum: `sha256:${"a".repeat(64)}`,
+          proposal: {
+            title: "退款目标",
+            goal: "减少咨询",
+            acceptanceCriteria: ["进度可查"],
+            priority: "medium",
+            questions: "# 问题确认\n请审阅范围，未知事项待确认。",
+          },
+        },
+      ],
+    });
+    const accept = vi.spyOn(api, "acceptWorkProposal");
+    const wrapper = mount(ManagerConversation, {
+      props: { projectId: "project-test", local },
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-action="accept-proposal"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("未知事项待确认");
+    expect(accept).not.toHaveBeenCalled();
     wrapper.unmount();
   });
   it("重开面板显示历史，不发送问题", async () => {
@@ -99,12 +158,10 @@ describe("正式项目经理对话", () => {
       projectId: "project-test",
       turns: [{ ...turn, status: "running" }],
     });
-    const cancel = vi
-      .spyOn(api, "cancelConversation")
-      .mockResolvedValue({
-        projectId: "project-test",
-        turns: [{ ...turn, status: "cancelled" }],
-      });
+    const cancel = vi.spyOn(api, "cancelConversation").mockResolvedValue({
+      projectId: "project-test",
+      turns: [{ ...turn, status: "cancelled" }],
+    });
     const wrapper = mount(ManagerConversation, {
       props: { projectId: "project-test", local },
     });

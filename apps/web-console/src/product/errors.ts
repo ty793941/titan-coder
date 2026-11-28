@@ -1,6 +1,11 @@
 import { ApiError } from "../api";
 
 const messages: Record<string, string> = {
+  CONVERSATION_PROPOSAL_CONFLICT:
+    "此提案版本无法确认，请重新读取历史并审阅保存的版本。",
+  CONTROL_PLANE_UNAVAILABLE:
+    "保存服务暂不可用，可用同一提案重试确认，不会重复建立目标。",
+  CSRF_UNAVAILABLE: "本机连接尚未就绪，请刷新项目状态后重试。",
   CONVERSATION_UNAVAILABLE: "项目经理对话暂不可用，请稍后重试。",
   CONVERSATION_BUSY: "这个项目正在回复，或本机对话繁忙，请稍后再发送。",
   CONVERSATION_CREDENTIAL_REQUIRED:

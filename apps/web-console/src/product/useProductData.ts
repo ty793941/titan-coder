@@ -85,6 +85,9 @@ export function useProductData() {
   const lastSync = ref("");
   let controller: AbortController | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
+  let refreshPromise: Promise<void> | undefined;
+  let refreshAgain = false;
+  let disposed = false;
 
   const projects = computed(() => state.value.projects);
   const decisions = computed<ProductDecision[]>(() =>
@@ -97,12 +100,10 @@ export function useProductData() {
     }),
   );
 
-  async function refresh() {
-    if (refreshing.value) return;
+  async function refreshOnce() {
     controller?.abort();
     controller = new AbortController();
     const active = controller;
-    refreshing.value = true;
     error.value = "";
     try {
       const snapshot = await loadProductData(api, active.signal);
@@ -117,9 +118,26 @@ export function useProductData() {
     } finally {
       if (!active.signal.aborted) {
         loading.value = false;
-        refreshing.value = false;
       }
     }
+  }
+  function refresh(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    if (refreshPromise) {
+      refreshAgain = true;
+      return refreshPromise;
+    }
+    refreshing.value = true;
+    refreshPromise = (async () => {
+      do {
+        refreshAgain = false;
+        await refreshOnce();
+      } while (refreshAgain && !disposed);
+    })().finally(() => {
+      refreshPromise = undefined;
+      refreshing.value = false;
+    });
+    return refreshPromise;
   }
 
   onMounted(() => {
@@ -129,6 +147,7 @@ export function useProductData() {
     }, 10000);
   });
   onBeforeUnmount(() => {
+    disposed = true;
     clearInterval(interval);
     controller?.abort();
   });

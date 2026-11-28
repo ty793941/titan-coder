@@ -10,14 +10,23 @@ import {
 import type {
   ConversationRequest,
   ConversationSnapshot,
+  ConversationTurn,
 } from "@titan/contracts";
 import type { LocalStatus, Provider } from "../../types";
 import { api, newRequestKey } from "../../api";
+import type { WorkProposalAccepted } from "../../api";
+import WorkProposalCard from "./WorkProposalCard.vue";
 import { productErrorMessage } from "../../product/errors";
 import { formatTime } from "../../workflow";
 
 const props = defineProps<{ projectId: string; local: LocalStatus | null }>();
-const emit = defineEmits<{ settings: []; close: [] }>();
+const emit = defineEmits<{
+  settings: [];
+  close: [];
+  accepted: [result: WorkProposalAccepted];
+  task: [id: string];
+  review: [id: string];
+}>();
 const snapshot = ref<ConversationSnapshot>({
   projectId: props.projectId,
   turns: [],
@@ -32,6 +41,8 @@ const feed = ref<HTMLElement>();
 const input = ref<HTMLTextAreaElement>();
 const loaded = ref(false);
 const chosen = ref(false);
+const mode = ref<"question" | "work-proposal">("question");
+const historyRevision = ref(0);
 let alive = true;
 let request: ConversationRequest | undefined;
 let controller: AbortController | undefined;
@@ -97,10 +108,11 @@ async function load() {
   const active = (controller = new AbortController());
   try {
     const value = await api.conversation(props.projectId, active.signal);
-    if (active.signal.aborted) return;
+    if (active.signal.aborted) return false;
     await update(value);
     loaded.value = true;
     error.value = "";
+    return true;
   } catch (caught) {
     if (!active.signal.aborted && alive) {
       error.value = productErrorMessage(caught);
@@ -109,6 +121,10 @@ async function load() {
   } finally {
     if (alive && !active.signal.aborted) loading.value = false;
   }
+  return false;
+}
+async function reloadHistory() {
+  if (await load()) historyRevision.value++;
 }
 async function send() {
   const text = draft.value.trim();
@@ -125,12 +141,17 @@ async function send() {
     !request ||
     request.text !== text ||
     request.provider !== provider.value ||
-    (request.modelRef ?? "") !== model.value.trim()
+    (request.modelRef ?? "") !== model.value.trim() ||
+    request.mode !==
+      (mode.value === "work-proposal" ? "work-proposal" : undefined)
   ) {
     request = {
       requestId: newRequestKey(),
       text,
       provider: provider.value,
+      ...(mode.value === "work-proposal"
+        ? { mode: "work-proposal" as const }
+        : {}),
       ...(model.value.trim() ? { modelRef: model.value.trim() } : {}),
     };
   }
@@ -167,8 +188,12 @@ async function cancel() {
     submitting.value = false;
   }
 }
-function retry(text: string) {
-  draft.value = text;
+function retry(turn: ConversationTurn) {
+  draft.value = turn.text;
+  mode.value = turn.mode === "work-proposal" ? "work-proposal" : "question";
+  provider.value = turn.provider;
+  chosen.value = true;
+  model.value = turn.modelRef ?? "";
   request = undefined;
   void nextTick(() => input.value?.focus());
 }
@@ -179,6 +204,7 @@ watch(
     controller?.abort();
     snapshot.value = { projectId: props.projectId, turns: [] };
     draft.value = "";
+    mode.value = "question";
     request = undefined;
     loading.value = true;
     loaded.value = false;
@@ -206,7 +232,7 @@ onBeforeUnmount(() => {
           class="product-icon-button"
           aria-label="刷新对话历史"
           :disabled="loading"
-          @click="load"
+          @click="reloadHistory"
         >
           <RefreshCw :size="16" /></button
         ><button class="product-secondary-action" @click="emit('close')">
@@ -217,6 +243,14 @@ onBeforeUnmount(() => {
     <div
       ref="feed"
       class="manager-feed"
+      :class="{
+        'has-proposals': snapshot.turns.some(
+          (turn) =>
+            turn.status === 'completed' &&
+            turn.mode === 'work-proposal' &&
+            turn.proposal,
+        ),
+      }"
       role="log"
       aria-live="polite"
       aria-label="对话记录"
@@ -253,9 +287,26 @@ onBeforeUnmount(() => {
             class="manager-thinking"
             role="status"
           >
-            <span class="small-dot green" />正在整理项目背景并回复…
+            <span class="small-dot green" />{{
+              turn.mode === "work-proposal"
+                ? "正在整理目标与问题确认草稿…"
+                : "正在整理项目背景并回复…"
+            }}
           </p>
-          <p v-else-if="turn.status === 'completed'">{{ turn.reply }}</p>
+          <template v-else-if="turn.status === 'completed'">
+            <p>{{ turn.reply }}</p>
+            <WorkProposalCard
+              v-if="turn.mode === 'work-proposal'"
+              :key="`${turn.id}:${historyRevision}`"
+              :project-id="projectId"
+              :turn="turn"
+              :csrf-token="local?.csrfToken"
+              @accepted="(result) => emit('accepted', result)"
+              @task="(id) => emit('task', id)"
+              @review="(id) => emit('review', id)"
+              @reload="reloadHistory"
+            />
+          </template>
           <template v-else
             ><p>
               {{
@@ -263,18 +314,35 @@ onBeforeUnmount(() => {
                   ? "本轮回复已停止。"
                   : turn.errorCode === "CONVERSATION_INTERRUPTED"
                     ? "上次回复因本机服务重启而中断，未自动重试。"
-                    : turn.errorCode === "CONVERSATION_TIMEOUT"
-                      ? "本轮回复超时，请稍后重试。"
-                      : "本轮回复未完成，请检查模型权限或网络后重试。"
+                    : turn.errorCode === "CONVERSATION_PROPOSAL_INVALID"
+                      ? "提案未通过结构或安全校验，没有创建工作目标。请补充要求后重新生成。"
+                      : turn.errorCode === "CONVERSATION_TIMEOUT"
+                        ? "本轮回复超时，请稍后重试。"
+                        : "本轮回复未完成，请检查模型权限或网络后重试。"
               }}
             </p>
-            <button class="product-text-button" @click="retry(turn.text)">
+            <button class="product-text-button" @click="retry(turn)">
               重新编辑并发送 <ArrowUpRight :size="14" /></button
           ></template>
         </div>
       </article>
     </div>
     <form class="manager-composer" @submit.prevent="send">
+      <div class="manager-intent">
+        <label for="manager-mode">本次意图</label
+        ><select
+          id="manager-mode"
+          v-model="mode"
+          :disabled="submitting || !!running"
+        >
+          <option value="question">普通问答</option>
+          <option value="work-proposal">生成工作提案</option></select
+        ><span>{{
+          mode === "work-proposal"
+            ? "生成目标、成功标准与草稿，审阅后由你确认保存。"
+            : "讨论项目背景、风险和下一步。"
+        }}</span>
+      </div>
       <div class="manager-model">
         <label for="manager-provider">模型服务</label
         ><select
@@ -345,7 +413,13 @@ onBeforeUnmount(() => {
             draft.length > 4000
           "
         >
-          <Send :size="15" />{{ submitting ? "正在发送…" : "发送问题" }}
+          <Send :size="15" />{{
+            submitting
+              ? "正在发送…"
+              : mode === "work-proposal"
+                ? "生成工作提案"
+                : "发送问题"
+          }}
         </button>
       </footer>
     </form>
@@ -403,6 +477,9 @@ onBeforeUnmount(() => {
   padding: 24px 0;
   margin: auto;
   text-align: center;
+}
+.manager-feed.has-proposals {
+  max-height: none;
 }
 .manager-welcome h3 {
   margin: 18px 0 10px;
@@ -480,6 +557,25 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+}
+.manager-intent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.manager-intent label {
+  margin: 0;
+  font-size: 12px;
+}
+.manager-intent select {
+  width: auto;
+  min-height: 44px;
+}
+.manager-intent > span {
+  color: var(--product-soft-ink);
+  font-size: 12px;
 }
 .manager-model label {
   font-size: 12px;
