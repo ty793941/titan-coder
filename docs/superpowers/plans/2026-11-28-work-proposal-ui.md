@@ -23,7 +23,7 @@
 
 ## 任务一：客户端与确认卡
 
-- [ ] 先添加 HTTP 与组件测试，运行观察缺少方法/组件的失败。关键断言：
+- [x] 先添加 HTTP 与组件测试，运行观察缺少方法/组件的失败。关键断言：
 
 ```ts
 expect(received.body).toEqual({ turnId, proposalChecksum, confirmed: true });
@@ -32,20 +32,20 @@ expect(accept).not.toHaveBeenCalled(); // 仅挂载或展开不确认
 expect(accept).toHaveBeenCalledWith(projectId, { turnId, proposalChecksum, confirmed: true }, 'local-csrf');
 ```
 
-- [ ] 实现 typed `api.acceptWorkProposal`，请求使用本机确认路径，不使用通用 `/api` 旁路。卡片用纯文本显示全文，不用 `v-html`；仅 completed 的 work-proposal 且存在 proposal/checksum 时渲染。确认期间禁止重复点击；失败保留来源不重新生成；成功发出 task/artifact 结果。
-- [ ] 运行 `pnpm --filter @titan/web-console exec vitest run test/api.test.ts test/work-proposal-ui.test.ts --maxWorkers=1`，验证转绿。
+- [x] 实现 typed `api.acceptWorkProposal`，请求使用本机确认路径，不使用通用 `/api` 旁路。卡片用纯文本显示全文，不用 `v-html`；仅 completed 的 work-proposal 且存在 proposal/checksum 时渲染。确认期间禁止重复点击；失败保留来源不重新生成；成功发出 task/artifact 结果。
+- [x] 运行 `pnpm --filter @titan/web-console exec vitest run test/api.test.ts test/work-proposal-ui.test.ts --maxWorkers=1`，验证转绿。
 
 ## 任务二：对话模式与正式导航
 
-- [ ] 添加模式测试：普通问答请求无 mode；生成模式带固定 mode；响应丢失时同内容同模式复用 requestId，切换模式更换 requestId；无凭证、运行中或历史读取失败时禁止发送。失败重编辑保留原 mode，不能意外退回问答。
-- [ ] 增加原生选择框“本次意图”，值为普通问答和生成工作提案；提交按钮与等待文案匹配模式。将提案卡作为独立组件接入历史，确认成功通知父页面刷新并保留当前对话；“查看工作目标”和“进入草稿审批”分别走既有 task/decision 路由。
-- [ ] 运行全部前端回归和 `typecheck`，不能破坏现有问答、取消、刷新恢复。
+- [x] 添加模式测试：普通问答请求无 mode；生成模式带固定 mode；响应丢失时同内容同模式复用 requestId，切换模式更换 requestId；无凭证、运行中或历史读取失败时禁止发送。失败重编辑保留原 mode，不能意外退回问答。
+- [x] 增加原生选择框“本次意图”，值为普通问答和生成工作提案；提交按钮与等待文案匹配模式。将提案卡作为独立组件接入历史，确认成功通知父页面刷新并保留当前对话；“查看工作目标”和“进入草稿审批”分别走既有 task/decision 路由。
+- [x] 运行全部前端回归和 `typecheck`，不能破坏现有问答、取消、刷新恢复。
 
 ## 任务三：真实浏览器、评审与交付
 
-- [ ] 使用独立离线模型夹具生成严格结构化提案，正文明确标记为离线验收；使用真实 Control Plane/PostgreSQL 创建任务与待审批工件。
-- [ ] 浏览器验证生成前无任务；生成后未确认仍无任务；确认后只新增一任务一工件，未批准且无 Session/Run；刷新历史重复确认返回同 ID；进入正式审批阅读正文、批准、推进。验证取消/非法提案无确认入口和四种屏宽无溢出。
-- [ ] 使用 Node 24 执行全仓无缓存 `pnpm exec turbo run build typecheck lint --force --output-logs=errors-only`、全部前端测试及 OpenAPI 检查。
+- [x] 使用独立离线模型夹具生成严格结构化提案，正文明确标记为离线验收；使用真实 Control Plane/PostgreSQL 创建任务与待审批工件。
+- [x] 浏览器验证生成前无任务；生成后未确认仍无任务；确认后只新增一任务一工件，未批准且无 Session/Run；刷新历史重复确认返回同 ID；进入正式审批阅读正文、批准、推进。验证取消/非法提案无确认入口和四种屏宽无溢出。
+- [x] 使用 Node 24 执行全仓无缓存 `pnpm exec turbo run build typecheck lint --force --output-logs=errors-only`、全部前端测试及 OpenAPI 检查。
 - [ ] 独立只读评审所有增量并修复 P1/P2；写中文验收证据，提交并代理推送至 `chore/initial-project`，检查本地远端一致，清理干净隔离工作树。保留用户未跟踪文档与原型。
 
 本计划在当前会话执行；用户此前已明确后续默认同意，无需重复询问设计或执行授权。真实付费模型调用不在本次自动化验收范围内。

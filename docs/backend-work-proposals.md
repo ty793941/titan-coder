@@ -4,6 +4,8 @@
 
 本轮只交付后端，不修改 Vue、CSS、前端请求客户端或页面流程。客户端可通过 HTTP 让项目经理生成结构化提案，再明确确认该版本，由控制面创建真实任务与问题确认工件。
 
+后续界面增量已接入正式项目经理对话，并完成真实浏览器的生成、人工确认、响应丢失恢复及正式审批。操作与新增验证见 [工作提案正式界面](work-proposal-ui-acceptance.md)；本文保留后端切片的接口与验证事实。
+
 生成仍使用原有 Codex App Server 或 Qwen Adapter，`tools=[]`，不写项目工作区、不批准阶段、不创建执行作业。确认只建立 `questions/active` Task 和 `questions/draft/pending` Artifact，不等于批准工件。后续审批和阶段推进继续走既有门禁。
 
 本轮没有新增数据库表或迁移。对话、提案保存在本机 `.titan/project-manager/` 私有历史，Task/Artifact 元数据、Outbox、审计和幂等结果由 PostgreSQL 维护。工件正文使用既有受控文件存储。
