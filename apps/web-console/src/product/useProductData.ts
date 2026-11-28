@@ -85,7 +85,7 @@ export function useProductData() {
   const lastSync = ref("");
   let controller: AbortController | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
-  let refreshPromise: Promise<void> | undefined;
+  let refreshPromise: Promise<boolean> | undefined;
   let refreshAgain = false;
   let disposed = false;
 
@@ -100,39 +100,43 @@ export function useProductData() {
     }),
   );
 
-  async function refreshOnce() {
+  async function refreshOnce(): Promise<boolean> {
     controller?.abort();
     controller = new AbortController();
     const active = controller;
     error.value = "";
     try {
       const snapshot = await loadProductData(api, active.signal);
-      if (active.signal.aborted) return;
+      if (active.signal.aborted) return false;
       state.value = snapshot.state;
       local.value = snapshot.local;
       artifactsByTask.value = snapshot.artifactsByTask;
       partialErrors.value = snapshot.errors;
       lastSync.value = snapshot.lastSync;
+      return true;
     } catch (caught) {
       if (!active.signal.aborted) error.value = productErrorMessage(caught);
+      return false;
     } finally {
       if (!active.signal.aborted) {
         loading.value = false;
       }
     }
   }
-  function refresh(): Promise<void> {
-    if (disposed) return Promise.resolve();
+  function refresh(): Promise<boolean> {
+    if (disposed) return Promise.resolve(false);
     if (refreshPromise) {
       refreshAgain = true;
       return refreshPromise;
     }
     refreshing.value = true;
     refreshPromise = (async () => {
+      let succeeded = false;
       do {
         refreshAgain = false;
-        await refreshOnce();
+        succeeded = await refreshOnce();
       } while (refreshAgain && !disposed);
+      return succeeded && !disposed;
     })().finally(() => {
       refreshPromise = undefined;
       refreshing.value = false;

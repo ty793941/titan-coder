@@ -82,16 +82,40 @@ async function created(id: string) {
   );
 }
 async function proposalAccepted(_result: WorkProposalAccepted) {
+  const origin = window.location.hash;
   notice.value =
     "工作目标与问题确认草稿已保存。草稿仍需单独审批，尚未启动执行。";
-  await product.refresh();
+  const synced = await product.refresh();
+  if (!synced && window.location.hash === origin)
+    notice.value =
+      "目标和草稿已保存，但资料尚未同步。请稍后点击目标或审批入口重试。";
 }
 async function openProposalTask(taskId: string) {
-  await product.refresh();
+  const origin = window.location.hash;
+  const synced = await product.refresh();
+  if (window.location.hash !== origin) return;
+  if (
+    !synced ||
+    !product.state.value.tasks.some((task) => task.id === taskId)
+  ) {
+    notice.value =
+      "目标资料尚未同步，请保留当前提案，稍后再次点击查看工作目标。";
+    return;
+  }
   navigate({ name: "task", taskId });
 }
 async function openProposalReview(artifactId: string) {
-  await product.refresh();
+  const origin = window.location.hash;
+  const synced = await product.refresh();
+  if (window.location.hash !== origin) return;
+  if (
+    !synced ||
+    !allArtifacts().some((artifact) => artifact.artifactId === artifactId)
+  ) {
+    notice.value =
+      "草稿资料尚未同步，请保留当前提案，稍后再次点击进入草稿审批。";
+    return;
+  }
   const decisionId = `review_artifact:${artifactId}`;
   if (product.decisions.value.some((item) => item.id === decisionId))
     navigate({ name: "decision", decisionId });
@@ -214,7 +238,11 @@ onBeforeUnmount(() => window.removeEventListener("hashchange", updateRoute));
       v-else-if="route.name === 'decision' && selectedDecision()"
       :key="selectedDecision()!.id"
       :decision="selectedDecision()!"
-      :on-refresh="product.refresh"
+      :on-refresh="
+        async () => {
+          await product.refresh();
+        }
+      "
       @back="navigate({ name: 'inbox' })"
       @project="(id) => navigate({ name: 'project', projectId: id })"
       @completed="
